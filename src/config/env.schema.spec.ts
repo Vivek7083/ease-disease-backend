@@ -39,7 +39,7 @@ describe('envSchema', () => {
   });
 
   describe('FRONTEND_BASE_URL and TRUST_PROXY_HOPS', () => {
-    const prod = { ...validEnv, NODE_ENV: 'production', PAYU_KEY: 'k', PAYU_SALT: 's' };
+    const prod = { ...validEnv, NODE_ENV: 'production', PAYU_KEY: 'k', PAYU_SALT: 's', API_PUBLIC_URL: 'https://api.easedisease.in' };
 
     it('are optional in development and default TRUST_PROXY_HOPS to 0', () => {
       const result = envSchema.parse(validEnv);
@@ -86,6 +86,36 @@ describe('envSchema', () => {
     });
   });
 
+  describe('API_PUBLIC_URL', () => {
+    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in' };
+
+    it('is optional in development', () => {
+      expect(envSchema.parse(validEnv).API_PUBLIC_URL).toBeUndefined();
+    });
+
+    it.each([
+      ['http://localhost:3000', 'http://localhost:3000'],
+      ['https://api.easedisease.in/', 'https://api.easedisease.in'],
+      ['HTTPS://API-Staging.EaseDisease.in', 'https://api-staging.easedisease.in'],
+    ])('normalises %s to %s', (input, expected) => {
+      expect(envSchema.parse({ ...validEnv, API_PUBLIC_URL: input }).API_PUBLIC_URL).toBe(expected);
+    });
+
+    it.each(['javascript:alert(1)', 'https://api.easedisease.in/v1', 'https://api.easedisease.in/?x=1', 'https://u:p@api.easedisease.in', 'nope', ''])(
+      'rejects %j',
+      (input) => {
+        expect(() => envSchema.parse({ ...validEnv, API_PUBLIC_URL: input })).toThrow();
+      },
+    );
+
+    it.each(['staging', 'production'])('is required in %s, and must be https', (nodeEnv) => {
+      const env = { ...deployed, NODE_ENV: nodeEnv };
+      expect(() => envSchema.parse(env)).toThrow(/API_PUBLIC_URL/);
+      expect(() => envSchema.parse({ ...env, API_PUBLIC_URL: 'http://api.easedisease.in' })).toThrow(/API_PUBLIC_URL/);
+      expect(envSchema.parse({ ...env, API_PUBLIC_URL: 'https://api.easedisease.in' }).API_PUBLIC_URL).toBe('https://api.easedisease.in');
+    });
+  });
+
   describe('PayU config', () => {
     it('defaults PAYU_ENV to test and allows missing credentials in development', () => {
       const result = envSchema.parse(validEnv);
@@ -96,7 +126,7 @@ describe('envSchema', () => {
 
     it.each(['staging', 'production'])('requires PAYU_KEY and PAYU_SALT when NODE_ENV is %s', (nodeEnv) => {
       // A valid FRONTEND_BASE_URL is always present here, so only the PayU credentials can be the reason for a failure.
-      const deployed = { ...validEnv, NODE_ENV: nodeEnv, FRONTEND_BASE_URL: 'https://easedisease.in' };
+      const deployed = { ...validEnv, NODE_ENV: nodeEnv, FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in' };
       expect(() => envSchema.parse(deployed)).toThrow(/PAYU_KEY/);
       expect(() => envSchema.parse({ ...deployed, PAYU_KEY: 'k' })).toThrow(/PAYU_SALT/);
       expect(() => envSchema.parse({ ...deployed, PAYU_SALT: 's' })).toThrow(/PAYU_KEY/);
@@ -113,7 +143,7 @@ describe('envSchema', () => {
 
     it('only allows PAYU_ENV=live in production', () => {
       const creds = { PAYU_KEY: 'k', PAYU_SALT: 's', PAYU_ENV: 'live' };
-      const frontend = { FRONTEND_BASE_URL: 'https://easedisease.in' };
+      const frontend = { FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in' };
       expect(() => envSchema.parse({ ...validEnv, ...creds })).toThrow(/PAYU_ENV=live/);
       expect(() => envSchema.parse({ ...validEnv, ...creds, ...frontend, NODE_ENV: 'staging' })).toThrow(/PAYU_ENV=live/);
       expect(envSchema.parse({ ...validEnv, ...creds, ...frontend, NODE_ENV: 'production' }).PAYU_ENV).toBe('live');

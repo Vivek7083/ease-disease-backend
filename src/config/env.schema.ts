@@ -1,5 +1,16 @@
 import { z } from 'zod';
 
+/** An http(s) origin only (no path, query, hash or credentials), normalised without a trailing slash. */
+const originUrl = () =>
+  z
+    .url()
+    .refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'must be an http(s) URL')
+    .refine((value) => {
+      const url = new URL(value);
+      return url.pathname === '/' && url.search === '' && url.hash === '' && url.username === '' && url.password === '';
+    }, 'must be an origin only (no path, query, hash or credentials)')
+    .transform((value) => new URL(value).origin);
+
 /**
  * Validated at boot (see config.module.ts). An invalid/missing env var throws here,
  * so the app never starts in a half-configured state.
@@ -14,15 +25,12 @@ export const envSchema = z
     PAYU_KEY: z.string().min(1).optional(),
     PAYU_SALT: z.string().min(1).optional(),
     /** Where PayU's browser callback sends the user. An origin only; the path is always ours. */
-    FRONTEND_BASE_URL: z
-      .url()
-      .refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'must be an http(s) URL')
-      .refine((value) => {
-        const url = new URL(value);
-        return url.pathname === '/' && url.search === '' && url.hash === '' && url.username === '' && url.password === '';
-      }, 'must be an origin only (no path, query, hash or credentials)')
-      .transform((value) => new URL(value).origin)
-      .optional(),
+    FRONTEND_BASE_URL: originUrl().optional(),
+    /**
+     * Public address of THIS API, used for the success/failure/cancel URLs PayU sends the browser back to.
+     * PayU's hosted-checkout docs require a public https URL, so outside development it must be https.
+     */
+    API_PUBLIC_URL: originUrl().optional(),
     /** Number of trusted reverse proxies in front of the app, so `req.ip` is the real client. */
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   })
@@ -36,10 +44,12 @@ export const envSchema = z
       }
     }
     if (env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') {
-      if (!env.FRONTEND_BASE_URL) {
-        ctx.addIssue({ code: 'custom', path: ['FRONTEND_BASE_URL'], message: `FRONTEND_BASE_URL is required when NODE_ENV is ${env.NODE_ENV}` });
-      } else if (!env.FRONTEND_BASE_URL.startsWith('https://')) {
-        ctx.addIssue({ code: 'custom', path: ['FRONTEND_BASE_URL'], message: 'FRONTEND_BASE_URL must use https outside development' });
+      for (const name of ['FRONTEND_BASE_URL', 'API_PUBLIC_URL'] as const) {
+        if (!env[name]) {
+          ctx.addIssue({ code: 'custom', path: [name], message: `${name} is required when NODE_ENV is ${env.NODE_ENV}` });
+        } else if (!env[name].startsWith('https://')) {
+          ctx.addIssue({ code: 'custom', path: [name], message: `${name} must use https outside development` });
+        }
       }
     }
     // Live PayU is production-only, so a staging/dev box can't take real money by misconfiguration.
