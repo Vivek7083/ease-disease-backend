@@ -13,6 +13,7 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
   let prisma: PrismaClient;
   let handler: PaymentHandlerService;
   let credentials: { get: () => unknown };
+  let payu: { verifyPayment: ReturnType<typeof vi.fn> };
 
   beforeAll(() => {
     prisma = createTestPrisma();
@@ -23,7 +24,9 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
   beforeEach(async () => {
     await truncateAll(prisma);
     credentials = { get: () => CREDS };
-    handler = new PaymentHandlerService(prisma, credentials as PayuCredentialsProvider);
+    // Default: PayU does not know the transaction, so these tests exercise logging without moving any state.
+    payu = { verifyPayment: vi.fn().mockResolvedValue({ outcome: 'not_found' }) };
+    handler = new PaymentHandlerService(prisma, credentials as PayuCredentialsProvider, payu);
   });
 
   const handle = (payload: unknown, source: 'RETURN' | 'WEBHOOK' | 'RECONCILE' = 'RETURN', sourceIp: string | null = '203.0.113.7') =>
@@ -37,14 +40,14 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
     }
   };
 
-  describe('valid hash and a matching booking', () => {
-    it('is verified, stores the event with its IP and source, and changes nothing else', async () => {
+  describe('valid hash and a matching booking (PayU does not know the transaction, so nothing moves)', () => {
+    it('is logged, stores the event with its IP and source, and changes nothing else', async () => {
       await createCheckoutFixture(prisma);
       const before = await snapshot(prisma);
 
       const result = await handle(signedPayload(), 'WEBHOOK', '203.0.113.7');
 
-      expect(result).toEqual({ outcome: 'verified', bookingReference: REFERENCE });
+      expect(result).toEqual({ outcome: 'not_found_at_payu', bookingReference: REFERENCE });
       expect(await snapshot(prisma)).toEqual(before);
       const [event] = await events();
       expect(event).toMatchObject({ source: 'WEBHOOK', hashValid: true, sourceIp: '203.0.113.7' });
@@ -52,8 +55,9 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
       expect(event!.payload).toMatchObject({ txnid: TXNID, status: 'success', amount: '2499.00' });
       expect(event!.verification).toMatchObject({
         hash: { valid: true, variant: 'standard' },
+        payuVerify: { outcome: 'not_found' },
         checks: { referenceMatches: true },
-        result: 'verified',
+        result: 'not_found_at_payu',
         handledAt: expect.any(String),
       });
     });
@@ -61,7 +65,7 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
     it('verifies the additional_charges variant', async () => {
       await createCheckoutFixture(prisma);
       const result = await handle(signedPayload({ additional_charges: '0.00' }));
-      expect(result.outcome).toBe('verified');
+      expect(result.outcome).toBe('not_found_at_payu');
       expect((await events())[0]!.verification).toMatchObject({ hash: { valid: true, variant: 'additional_charges' } });
     });
 
@@ -75,7 +79,7 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
 
     it('logs every signal: the same payload handled three times leaves three events', async () => {
       await createCheckoutFixture(prisma);
-      for (let i = 0; i < 3; i++) expect((await handle(signedPayload())).outcome).toBe('verified');
+      for (let i = 0; i < 3; i++) expect((await handle(signedPayload())).outcome).toBe('not_found_at_payu');
       expect(await prisma.paymentEvent.count()).toBe(3);
       await expectAllEventsVerified();
     });
@@ -237,7 +241,7 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
     it('hostile text in a hash-signed field of a KNOWN transaction is stored as data too', async () => {
       await createCheckoutFixture(prisma);
       const result = await handle(signedPayload({ firstname: sql, email: `${sql}@x.com`, productinfo: sql }));
-      expect(result.outcome).toBe('verified');
+      expect(result.outcome).toBe('not_found_at_payu');
       expect((await events())[0]!.payload).toMatchObject({ firstname: sql, productinfo: sql });
       expect(await prisma.transaction.count()).toBe(1);
     });
