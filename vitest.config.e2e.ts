@@ -6,5 +6,8 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.e2e-spec.ts'],
+    globalSetup: ['./test/global-setup.ts'],
+    // Integration tests share one test database and truncate it, so files must not overlap.
+    fileParallelism: false,
   },
 });

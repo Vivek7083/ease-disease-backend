@@ -12,21 +12,165 @@ datasource db {
   provider = "postgresql"
 }
 
-// S1 (Foundations): only `users` is needed here, for /healthz's DB connectivity check.
-// Remaining tables (packages, bookings, transactions, ...) land in their own slices,
-// per docs/plans/2026-10-16-slice-plan.md and docs/ddl/2026-10-16-schema-ddl.sql.
+// Timestamps are `timestamptz` (an exact instant, stored as UTC), never bare `timestamp`.
+// Calendar dates (date of birth) stay `@db.Date`: a birthday is not an instant.
+//
+// Prisma cannot express CHECK constraints or jsonb element checks. Those live as hand-written SQL
+// in the migration `*_payu_spike_schema` (amounts >= 0, packages.description is a json array).
+// `@updatedAt` is applied by the Prisma client only: raw SQL and guarded `updateMany` calls
+// must set `updatedAt` themselves.
 
 model User {
-  id            String    @id @default(uuid()) @db.Uuid
-  firebaseUid   String    @unique @map("firebase_uid")
-  name          String?
-  email         String
-  phone         String?
-  dob           DateTime? @db.Date
-  authProvider  String    @map("auth_provider")
-  lastLoginAt   DateTime? @map("last_login_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  id           String    @id @default(uuid()) @db.Uuid
+  firebaseUid  String    @unique @map("firebase_uid")
+  name         String?
+  email        String
+  phone        String?
+  dob          DateTime? @db.Date
+  authProvider String    @map("auth_provider")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  bookings     Booking[]
+  transactions Transaction[]
 
   @@map("users")
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  EXPIRED
+  NEEDS_ATTENTION
+
+  @@map("booking_status")
+}
+
+enum TransactionStatus {
+  CREATED
+  INITIATED
+  SUCCESS
+  FAILURE
+  PENDING
+  CANCELLED
+  EXPIRED
+
+  @@map("transaction_status")
+}
+
+/// Deliberately minimal for now; more columns arrive via later migrations.
+model Package {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  /// JSON array of strings: bullet points the frontend shows as-is.
+  description Json     @db.JsonB
+  pricePaise  Int      @map("price_paise")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  bookings Booking[]
+
+  @@index([isActive])
+  @@map("packages")
+}
+
+model Booking {
+  id            String        @id @default(uuid()) @db.Uuid
+  reference     String        @unique
+  userId        String        @map("user_id") @db.Uuid
+  packageId     String        @map("package_id") @db.Uuid
+  status        BookingStatus @default(PENDING_PAYMENT)
+  /// Snapshots taken at creation time: PayU's `productinfo` and the charged amount must not
+  /// change if the package is edited later.
+  packageTitle  String        @map("package_title")
+  amountPaise   Int           @map("amount_paise")
+  currency      String        @default("INR")
+  patientName   String        @map("patient_name")
+  patientDob    DateTime?     @map("patient_dob") @db.Date
+  notes         String?
+  consentAt     DateTime      @map("consent_at") @db.Timestamptz(3)
+  /// Payment window only (no slot capacity in v1). Null once no longer relevant.
+  holdExpiresAt DateTime?     @map("hold_expires_at") @db.Timestamptz(3)
+  /// Unused for now: room for the admin dashboard (when the consult is scheduled / what the expert noted).
+  scheduledAt   DateTime?     @map("scheduled_at") @db.Timestamptz(3)
+  expertNotes   String?       @map("expert_notes")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user         User          @relation(fields: [userId], references: [id])
+  package      Package       @relation(fields: [packageId], references: [id])
+  transactions Transaction[]
+
+  @@index([userId, status])
+  @@map("bookings")
+}
+
+model Transaction {
+  id           String            @id @default(uuid()) @db.Uuid
+  /// PayU `txnid`, e.g. EDTX01JB... (<= 25 chars).
+  orderId      String            @unique @map("order_id")
+  bookingId    String            @map("booking_id") @db.Uuid
+  userId       String            @map("user_id") @db.Uuid
+  gateway      String            @default("PAYU")
+  amountPaise  Int               @map("amount_paise")
+  currency     String            @default("INR")
+  status       TransactionStatus @default(CREATED)
+  paymentMode  String?           @map("payment_mode")
+  /// PayU `mihpayid`.
+  pgTxnId      String?           @map("pg_txn_id")
+  bankRefNum   String?           @map("bank_ref_num")
+  errorCode    String?           @map("error_code")
+  errorMessage String?           @map("error_message")
+  completedAt  DateTime?         @map("completed_at") @db.Timestamptz(3)
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  booking Booking        @relation(fields: [bookingId], references: [id])
+  user    User           @relation(fields: [userId], references: [id])
+  events  PaymentEvent[]
+
+  @@index([bookingId])
+  /// Used by the reconcile tick to find INITIATED / PENDING transactions older than 20 minutes.
+  @@index([status, updatedAt])
+  @@map("transactions")
+}
+
+/// Append-only by convention (enforced in the application, not by the database).
+model PaymentEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  /// Null when the payload's txnid matched no transaction: unknown events are still logged.
+  transactionId String?  @map("transaction_id") @db.Uuid
+  /// RETURN | WEBHOOK | RECONCILE
+  source        String
+  hashValid     Boolean  @map("hash_valid")
+  /// Raw payload exactly as received.
+  payload       Json     @db.JsonB
+  receivedAt    DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
+
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([transactionId])
+  @@map("payment_events")
+}
+
+model Outbox {
+  id            String   @id @default(uuid()) @db.Uuid
+  /// e.g. BOOKING_CONFIRMATION, EXPERT_ALERT, ADMIN_ALERT
+  type          String
+  payload       Json     @db.JsonB
+  /// PENDING | SENT | FAILED
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  lastError     String?  @map("last_error")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, nextAttemptAt])
+  @@map("outbox")
 }
