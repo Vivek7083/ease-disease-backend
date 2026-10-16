@@ -21,8 +21,8 @@ build/
 !.env.example
 
 # --- Prisma ---
-# Generated client output, if generated outside node_modules
-/generated/prisma/
+# Generated client output (regenerated via `npx prisma generate`, not hand-edited)
+src/generated/
 
 # --- Testing ---
 coverage/

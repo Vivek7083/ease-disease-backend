@@ -1,0 +1,32 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// S1 (Foundations): only `users` is needed here, for /healthz's DB connectivity check.
+// Remaining tables (packages, bookings, transactions, ...) land in their own slices,
+// per docs/plans/2026-10-16-slice-plan.md and docs/ddl/2026-10-16-schema-ddl.sql.
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  firebaseUid   String    @unique @map("firebase_uid")
+  name          String?
+  email         String
+  phone         String?
+  dob           DateTime? @db.Date
+  authProvider  String    @map("auth_provider")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
