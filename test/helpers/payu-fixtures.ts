@@ -57,31 +57,41 @@ export function signedPayload(overrides: Partial<PayuPayloadFields> = {}): Recor
   return { key: CREDS.key, ...rest, ...(additional_charges === undefined ? {} : { additional_charges }), hash };
 }
 
-export interface CheckoutFixtureOptions {
-  txnid?: string;
+export interface BookingFixtureOptions {
   reference?: string;
   amountPaise?: number;
   bookingStatus?: BookingStatus;
-  transactionStatus?: TransactionStatus;
   notes?: string;
+  userName?: string | null;
+  userEmail?: string;
+  /** Stored as given (the profile step normalises to E.164 in real life). `null` = no phone yet. */
+  userPhone?: string | null;
+  packageTitle?: string;
 }
 
-/** A user, the package, one booking and its one INITIATED transaction: the state right after checkout. */
-export async function createCheckoutFixture(prisma: PrismaClient, options: CheckoutFixtureOptions = {}) {
+export interface CheckoutFixtureOptions extends BookingFixtureOptions {
+  txnid?: string;
+  transactionStatus?: TransactionStatus;
+}
+
+/** A user, a package and a booking, with NO transaction yet: the state before checkout. */
+export async function createBookingFixture(prisma: PrismaClient, options: BookingFixtureOptions = {}) {
   const {
-    txnid = TXNID,
     reference = REFERENCE,
     amountPaise = AMOUNT_PAISE,
     bookingStatus = 'PENDING_PAYMENT',
-    transactionStatus = 'INITIATED',
     notes = 'Private symptom notes: bloating after meals',
+    userName = 'Priya Sharma',
+    userEmail = 'priya@example.com',
+    userPhone = '+919876543210',
+    packageTitle = 'One-Time Consult',
   } = options;
 
   const user = await prisma.user.create({
-    data: { firebaseUid: `fb_${randomUUID()}`, email: 'priya@example.com', name: 'Priya Sharma', authProvider: 'google.com' },
+    data: { firebaseUid: `fb_${randomUUID()}`, email: userEmail, name: userName, phone: userPhone, authProvider: 'google.com' },
   });
   const pkg = await prisma.package.create({
-    data: { title: 'One-Time Consult', description: ['3-week plan.'], pricePaise: amountPaise },
+    data: { title: packageTitle, description: ['3-week plan.'], pricePaise: amountPaise },
   });
   const booking = await prisma.booking.create({
     data: {
@@ -89,17 +99,30 @@ export async function createCheckoutFixture(prisma: PrismaClient, options: Check
       userId: user.id,
       packageId: pkg.id,
       status: bookingStatus,
-      packageTitle: 'One-Time Consult',
+      packageTitle,
       amountPaise,
       patientName: 'Priya Sharma',
       notes,
       consentAt: new Date(),
     },
   });
+  return { user, pkg, booking };
+}
+
+/** A user, the package, one booking and its one transaction: the state right after checkout. */
+export async function createCheckoutFixture(prisma: PrismaClient, options: CheckoutFixtureOptions = {}) {
+  const { txnid = TXNID, transactionStatus = 'INITIATED', ...bookingOptions } = options;
+  const base = await createBookingFixture(prisma, bookingOptions);
   const transaction = await prisma.transaction.create({
-    data: { orderId: txnid, bookingId: booking.id, userId: user.id, amountPaise, status: transactionStatus },
+    data: {
+      orderId: txnid,
+      bookingId: base.booking.id,
+      userId: base.user.id,
+      amountPaise: base.booking.amountPaise,
+      status: transactionStatus,
+    },
   });
-  return { user, pkg, booking, transaction };
+  return { ...base, transaction };
 }
 
 /** Row counts and key states, to prove a handled signal changed (or did not change) anything. */
