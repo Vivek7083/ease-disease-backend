@@ -46,6 +46,8 @@ enum BookingStatus {
   NO_SHOW
   EXPIRED
   NEEDS_ATTENTION
+  /// Payment failed or was cancelled at PayU. The user may book again (one active booking per user).
+  FAILED
 
   @@map("booking_status")
 }
@@ -102,9 +104,11 @@ model Booking {
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  user         User          @relation(fields: [userId], references: [id])
-  package      Package       @relation(fields: [packageId], references: [id])
-  transactions Transaction[]
+  user        User         @relation(fields: [userId], references: [id])
+  package     Package      @relation(fields: [packageId], references: [id])
+  /// One transaction per booking for now (UNIQUE transactions.booking_id). Retries later: drop that
+  /// unique index and turn this back into a list.
+  transaction Transaction?
 
   @@index([userId, status])
   @@map("bookings")
@@ -134,7 +138,7 @@ model Transaction {
   user    User           @relation(fields: [userId], references: [id])
   events  PaymentEvent[]
 
-  @@index([bookingId])
+  @@unique([bookingId])
   /// Used by the reconcile tick to find INITIATED / PENDING transactions older than 20 minutes.
   @@index([status, updatedAt])
   @@map("transactions")
@@ -151,8 +155,14 @@ model PaymentEvent {
   /// Raw payload exactly as received.
   payload       Json     @db.JsonB
   receivedAt    DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
+  /// What we concluded about this event (hash result, PayU verify answer, checks, outcome).
+  /// Written exactly once, after the handler finishes; a DB trigger forbids any other change.
+  verification  Json?    @db.JsonB
+  /// Client address of the inbound callback / webhook request (null for RECONCILE events, which have no
+  /// inbound request). At most 45 chars (longest IPv6 text form). Immutable like the rest of the raw event.
+  sourceIp      String?  @map("source_ip")
 
-  transaction Transaction? @relation(fields: [transactionId], references: [id])
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
 
   @@index([transactionId])
   @@map("payment_events")

@@ -53,9 +53,11 @@ describe('PayU spike schema (real Postgres)', () => {
     });
 
     it('rejects a duplicate transaction order_id (PayU txnid)', async () => {
-      const booking = await makeBooking();
-      await prisma.transaction.create({ data: transactionData(booking.id, booking.userId) });
-      await expect(prisma.transaction.create({ data: transactionData(booking.id, booking.userId) })).rejects.toThrow();
+      // Two different bookings, so only the order_id can be the reason for the rejection.
+      const first = await makeBooking('ED-FIRST01');
+      const second = await makeBooking('ED-SECOND1');
+      await prisma.transaction.create({ data: transactionData(first.id, first.userId) });
+      await expect(prisma.transaction.create({ data: transactionData(second.id, second.userId) })).rejects.toThrow();
       expect(await prisma.transaction.count()).toBe(1);
     });
   });
