@@ -174,6 +174,7 @@ export class PaymentHandlerService {
       outcome: 'found',
       status: paid.status,
       rawStatus: paid.rawStatus,
+      unmappedStatus: paid.unmappedStatus,
       amountPaise: paid.amountPaise,
       mihpayid: paid.mihpayid,
     };

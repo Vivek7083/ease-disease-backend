@@ -37,6 +37,7 @@ describe('PayU callback and webhook over HTTP', () => {
     txnid: TXNID,
     status: 'success',
     rawStatus: 'success',
+    unmappedStatus: 'captured',
     amountPaise: AMOUNT_PAISE,
     mihpayid: '21564143078',
     mode: 'UPI',

@@ -1,7 +1,7 @@
 import { AppException } from '../src/common/exceptions/app.exception.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { PaymentHandlerService, type HandleResult } from '../src/payments/payment-handler.service.js';
-import { PayuGatewayError, type PayuVerifyResult } from '../src/payments/payu/payu-client.js';
+import { PayuClient, PayuGatewayError, type PayuVerifyResult } from '../src/payments/payu/payu-client.js';
 import type { PayuCredentialsProvider } from '../src/payments/payu/payu-credentials.provider.js';
 import { AMOUNT_PAISE, CREDS, REFERENCE, TXNID, createCheckoutFixture, signedPayload, type CheckoutFixtureOptions } from './helpers/payu-fixtures.js';
 import { createTestPrisma, truncateAll } from './helpers/test-db.js';
@@ -22,6 +22,7 @@ describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () =>
     txnid: TXNID,
     status: 'success',
     rawStatus: 'success',
+    unmappedStatus: 'captured',
     amountPaise: AMOUNT_PAISE,
     mihpayid: '21564143078',
     mode: 'UPI',
@@ -81,7 +82,7 @@ describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () =>
       expect(events).toHaveLength(1);
       expect(events[0]!.verification).toMatchObject({
         hash: { valid: true },
-        payuVerify: { outcome: 'found', status: 'success', amountPaise: AMOUNT_PAISE },
+        payuVerify: { outcome: 'found', status: 'success', unmappedStatus: 'captured', amountPaise: AMOUNT_PAISE },
         checks: { referenceMatches: true, amountMatches: true },
         result: 'applied',
       });
@@ -464,4 +465,64 @@ describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () =>
       expect(await prisma.transaction.count()).toBe(1);
     });
   });
+
+  describe('with the real PayuClient and PayU-shaped JSON (the exact wire format, not our normalised result)', () => {
+    const wire = (entry: Record<string, unknown>) => ({
+      status: 1,
+      msg: '1 out of 1 Transactions Fetched Successfully',
+      transaction_details: {
+        [TXNID]: { mihpayid: '21564143078', bank_ref_num: '431998369241', amt: '2499.00', txnid: TXNID, mode: 'UPI', error_code: 'E000', error_Message: 'NO ERROR', ...entry },
+      },
+    });
+    const handlerWithWire = (entry: Record<string, unknown>) => {
+      const client = new PayuClient(
+        () => CREDS,
+        async () => ({ status: 200, text: JSON.stringify(wire(entry)) }),
+      );
+      return new PaymentHandlerService(prisma, { get: () => CREDS } as unknown as PayuCredentialsProvider, client);
+    };
+    const run = (entry: Record<string, unknown>) =>
+      handlerWithWire(entry).handle({ source: 'WEBHOOK', payload: signedPayload(), sourceIp: null });
+
+    it.each([
+      ['failed', 'failed'],
+      ['failure', 'failed'],
+      ['Failed', 'bounced'],
+      ['failed', 'dropped'],
+    ])('PayU status %j / unmappedstatus %j marks the transaction FAILURE and the booking FAILED', async (status, unmappedstatus) => {
+      await fixture();
+      const result = await run({ status, unmappedstatus });
+      expect(result.outcome).toBe('failed_payment');
+      const { booking, tx, outbox, events } = await state();
+      expect(booking.status).toBe('FAILED');
+      expect(tx.status).toBe('FAILURE');
+      expect(outbox).toHaveLength(0);
+      expect(events[0]!.verification).toMatchObject({ payuVerify: { status: 'failure', rawStatus: status, unmappedStatus: unmappedstatus } });
+    });
+
+    it('a user-cancelled payment reported as failed marks the transaction CANCELLED and the booking FAILED', async () => {
+      await fixture();
+      expect((await run({ status: 'failed', unmappedstatus: 'userCancelled' })).outcome).toBe('failed_payment');
+      const { booking, tx } = await state();
+      expect(tx.status).toBe('CANCELLED');
+      expect(booking.status).toBe('FAILED');
+    });
+
+    it.each(['captured', 'auth'])('success with unmappedstatus %s confirms the booking and records it for audit', async (unmappedstatus) => {
+      await fixture();
+      expect((await run({ status: 'success', unmappedstatus })).outcome).toBe('applied');
+      const { booking, events } = await state();
+      expect(booking.status).toBe('CONFIRMED');
+      expect(events[0]!.verification).toMatchObject({ payuVerify: { status: 'success', unmappedStatus: unmappedstatus } });
+    });
+
+    it('an unrecognised status still changes nothing', async () => {
+      await fixture();
+      expect((await run({ status: 'somethingNew', unmappedstatus: 'whatever' })).outcome).toBe('not_found_at_payu');
+      const { booking, tx } = await state();
+      expect(booking.status).toBe('PENDING_PAYMENT');
+      expect(tx.status).toBe('INITIATED');
+    });
+  });
+
 });

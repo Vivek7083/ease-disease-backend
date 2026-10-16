@@ -60,6 +60,7 @@ describe('PayuClient.verifyPayment', () => {
       txnid: TXNID,
       status: 'success',
       rawStatus: 'success',
+      unmappedStatus: 'captured',
       amountPaise: 150000,
       mihpayid: '21564143078',
       mode: 'UPI',
@@ -71,6 +72,16 @@ describe('PayuClient.verifyPayment', () => {
 
   it.each([
     [{ status: 'failure', unmappedstatus: 'failed', bank_ref_num: null }, 'failure'],
+    // PayU's docs spell the failed state both ways, and use these internal states for failures:
+    [{ status: 'failed', unmappedstatus: 'failed' }, 'failure'],
+    [{ status: 'Failed', unmappedstatus: 'failed' }, 'failure'],
+    [{ status: 'failed', unmappedstatus: 'bounced' }, 'failure'],
+    [{ status: 'failure', unmappedstatus: 'dropped' }, 'failure'],
+    [{ status: 'failed', unmappedstatus: 'userCancelled' }, 'cancelled'],
+    [{ status: 'failed', unmappedstatus: 'usercancelled' }, 'cancelled'],
+    [{ status: 'success', unmappedstatus: 'auth' }, 'success'],
+    [{ status: 'pending', unmappedstatus: 'in progress' }, 'pending'],
+    [{ status: 'failed', unmappedstatus: null }, 'failure'],
     [{ status: 'failure', unmappedstatus: 'userCancelled' }, 'cancelled'],
     [{ status: 'pending', unmappedstatus: 'pending' }, 'pending'],
     [{ status: 'SUCCESS' }, 'success'],

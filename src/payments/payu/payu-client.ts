@@ -55,6 +55,8 @@ export type PayuVerifyResult =
       /** Normalised. Anything we don't recognise is 'unknown' and must never confirm a booking. */
       status: PayuPaymentStatus;
       rawStatus: string;
+      /** PayU's finer-grained state (captured, auth, bounced, dropped, usercancelled, ...). Kept for audit, never used to decide. */
+      unmappedStatus: string | null;
       amountPaise: number;
       mihpayid: string | null;
       mode: string | null;
@@ -168,6 +170,7 @@ export class PayuClient {
       txnid,
       status: normaliseStatus(detail.status, detail.unmappedstatus),
       rawStatus: detail.status,
+      unmappedStatus: detail.unmappedstatus,
       amountPaise,
       mihpayid: detail.mihpayid,
       mode: detail.mode,
@@ -182,7 +185,8 @@ function normaliseStatus(status: string, unmappedStatus: string | null): PayuPay
   const s = status.toLowerCase();
   if (s === 'success') return 'success';
   if (s === 'pending') return 'pending';
-  if (s === 'failure') return unmappedStatus?.toLowerCase() === 'usercancelled' ? 'cancelled' : 'failure';
+  // PayU's own docs spell the failed state both ways: 'failure' and 'failed'.
+  if (s === 'failure' || s === 'failed') return unmappedStatus?.toLowerCase() === 'usercancelled' ? 'cancelled' : 'failure';
   if (s === 'usercancelled' || s === 'cancelled') return 'cancelled';
   return 'unknown';
 }
