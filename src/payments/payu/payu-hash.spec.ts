@@ -4,6 +4,7 @@ import {
   computeResponseHash,
   computeVerifyPaymentHash,
   formatAmountPaise,
+  parseAmountToPaise,
   verifyResponseHash,
 } from './payu-hash.js';
 
@@ -53,6 +54,31 @@ describe('formatAmountPaise', () => {
       expect(() => formatAmountPaise(paise)).toThrow(RangeError);
     },
   );
+});
+
+describe('parseAmountToPaise', () => {
+  it.each([
+    ['1500.00', 150000],
+    ['0.05', 5],
+    ['1.5', 150],
+    ['2', 200],
+    ['1234.56', 123456],
+  ])('parses %s as %i paise', (amount, expected) => {
+    expect(parseAmountToPaise(amount)).toBe(expected);
+  });
+
+  it.each(['', '-1.00', '1.005', '1,500.00', 'abc', '1.', '.5', ' 1.00', '1e3', '9999999999999.00'])(
+    'rejects %j',
+    (amount) => {
+      expect(parseAmountToPaise(amount)).toBeNull();
+    },
+  );
+
+  it('round-trips with formatAmountPaise', () => {
+    for (const paise of [0, 1, 99, 100, 150000, 123456]) {
+      expect(parseAmountToPaise(formatAmountPaise(paise))).toBe(paise);
+    }
+  });
 });
 
 describe('computeRequestHash', () => {

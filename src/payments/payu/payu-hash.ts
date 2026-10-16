@@ -53,6 +53,14 @@ export function formatAmountPaise(paise: number): string {
   return `${rupees}.${remainder}`;
 }
 
+/** PayU amount string -> integer paise ("1500.00" -> 150000). Strict: digits with up to 2 decimals, or null. */
+export function parseAmountToPaise(amount: string): number | null {
+  const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(amount);
+  if (!match) return null;
+  const paise = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  return Number.isSafeInteger(paise) ? paise : null;
+}
+
 export function computeRequestHash(input: PayuRequestHashInput): string {
   return sha512Hex(
     [
