@@ -9,7 +9,7 @@ import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter
 import { RequestIdMiddleware } from '../src/common/middleware/request-id.middleware.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { PaymentsModule } from '../src/payments/payments.module.js';
-import { PayuClient, type PayuVerifyResult } from '../src/payments/payu/payu-client.js';
+import { PayuClient, PayuGatewayError, type PayuVerifyResult } from '../src/payments/payu/payu-client.js';
 import { PayuCredentialsProvider } from '../src/payments/payu/payu-credentials.provider.js';
 import { TXNID_PATTERN } from '../src/payments/payu/payu-txnid.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
@@ -90,6 +90,7 @@ describe('dev PayU tooling', () => {
         () => http().post(`${BASE}/checkout-fields/ED-ABCDEF`),
         () => http().get(`${BASE}/checkout-page/ED-ABCDEF`),
         () => http().get(`${BASE}/bookings/ED-ABCDEF`),
+        () => http().post(`${BASE}/verify/ED-ABCDEF`),
       ];
       for (const call of calls) {
         const res = await call().expect(404);
@@ -287,6 +288,92 @@ describe('dev PayU tooling', () => {
         expect(res.body.transaction.events).toHaveLength(1);
         expect(res.body.transaction.events[0]).toMatchObject({ source: 'RETURN', hashValid: true, verification: { result: 'applied' } });
         expect(res.body.outbox.map((o: { type: string }) => o.type).sort()).toEqual(['BOOKING_CONFIRMATION', 'EXPERT_ALERT']);
+      });
+    });
+
+    describe('POST /dev/payu/verify/:reference (read-only: what does PayU say right now?)', () => {
+      const pending: PayuVerifyResult = {
+        outcome: 'found',
+        txnid: 'EDTX_PU_1792189780572ABCD',
+        status: 'pending',
+        rawStatus: 'pending',
+        unmappedStatus: 'pending',
+        amountPaise: 100,
+        mihpayid: '20000059999',
+        mode: 'UPI',
+        bankRefNum: null,
+        errorCode: null,
+        errorMessage: null,
+      };
+      const checkedOut = async () => {
+        const { reference } = await fixtureBooking();
+        await http().post(`${BASE}/checkout-fields/${reference}`).expect(201);
+        return { reference, orderId: (await prisma.transaction.findFirstOrThrow()).orderId };
+      };
+
+      it("returns PayU's answer for the booking's transaction and asks about exactly that txnid", async () => {
+        const { reference, orderId } = await checkedOut();
+        payu.verifyPayment.mockResolvedValue(pending);
+
+        const res = await http().post(`${BASE}/verify/${reference}`).expect(200);
+
+        expect(payu.verifyPayment).toHaveBeenCalledExactlyOnceWith(orderId);
+        expect(res.body).toMatchObject({
+          reference,
+          orderId,
+          ourTransactionStatus: 'INITIATED',
+          ourBookingStatus: 'PENDING_PAYMENT',
+          payu: { outcome: 'found', status: 'pending', unmappedStatus: 'pending', mihpayid: '20000059999' },
+        });
+      });
+
+      it.each([
+        ['a success', { ...pending, status: 'success', rawStatus: 'success', unmappedStatus: 'captured' }],
+        ['a failure', { ...pending, status: 'failure', rawStatus: 'failure', unmappedStatus: 'failed' }],
+        ['not found', { outcome: 'not_found' }],
+      ] as const)('changes nothing, even when PayU says %s', async (_name, answer) => {
+        const { reference } = await checkedOut();
+        payu.verifyPayment.mockResolvedValue(answer);
+        const before = { booking: await prisma.booking.findFirstOrThrow(), tx: await prisma.transaction.findFirstOrThrow() };
+
+        await http().post(`${BASE}/verify/${reference}`).expect(200);
+
+        expect(await prisma.booking.findFirstOrThrow()).toEqual(before.booking);
+        expect(await prisma.transaction.findFirstOrThrow()).toEqual(before.tx);
+        expect(await prisma.paymentEvent.count()).toBe(0);
+        expect(await prisma.outbox.count()).toBe(0);
+      });
+
+      it('a booking with no transaction yet is a 409 that says what to do', async () => {
+        const { reference } = await fixtureBooking();
+        const res = await http().post(`${BASE}/verify/${reference}`).expect(409);
+        expect(res.body.error).toMatchObject({ code: 'NO_TRANSACTION' });
+        expect(payu.verifyPayment).not.toHaveBeenCalled();
+      });
+
+      it('PayU being unreachable is a 503, not a hang or a 500', async () => {
+        const { reference } = await checkedOut();
+        payu.verifyPayment.mockRejectedValue(new PayuGatewayError('verify_payment returned HTTP 503'));
+        const res = await http().post(`${BASE}/verify/${reference}`).expect(503);
+        expect(res.body.error).toMatchObject({ code: 'PAYMENT_GATEWAY_UNAVAILABLE', message: 'verify_payment returned HTTP 503' });
+      });
+
+      it('payments not configured is a 503 too', async () => {
+        const { reference } = await checkedOut();
+        payu.verifyPayment.mockRejectedValue(new AppException('PAYMENT_GATEWAY_UNAVAILABLE', 'Payment gateway is not configured', 503));
+        await http().post(`${BASE}/verify/${reference}`).expect(503);
+      });
+
+      it.each(['ED-NOSUCH1', 'x%00y', "'%20OR%20'1'='1"])('an unknown or malformed reference (%s) is a 404 and PayU is not asked', async (reference) => {
+        const res = await http().post(`${BASE}/verify/${reference}`).expect(404);
+        expect(res.body.error.code).toBe('BOOKING_NOT_FOUND');
+        expect(payu.verifyPayment).not.toHaveBeenCalled();
+      });
+
+      it('lets an unexpected error surface as an error instead of hiding it', async () => {
+        const { reference } = await checkedOut();
+        payu.verifyPayment.mockRejectedValue(new TypeError('bug'));
+        await http().post(`${BASE}/verify/${reference}`).expect(500);
       });
     });
 

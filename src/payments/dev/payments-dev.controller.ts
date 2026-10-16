@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   HttpStatus,
   Inject,
   Param,
@@ -18,6 +19,7 @@ import { DevelopmentOnlyGuard } from '../../common/guards/development-only.guard
 import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CheckoutService } from '../checkout.service.js';
+import { PayuClient, PayuGatewayError } from '../payu/payu-client.js';
 import type { CheckoutForm } from '../payu/payu-checkout-fields.js';
 import { checkoutPageCsp, renderCheckoutPage } from './checkout-page.js';
 
@@ -54,6 +56,8 @@ export class PaymentsDevController {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaClient,
     private readonly checkout: CheckoutService,
+    @Inject(PayuClient)
+    private readonly payu: Pick<PayuClient, 'verifyPayment'>,
   ) {}
 
   @Post('fixture-booking')
@@ -209,6 +213,52 @@ export class PaymentsDevController {
     });
     const { transaction, ...bookingFields } = booking;
     return { booking: bookingFields, transaction, outbox };
+  }
+
+  @Post('verify/:reference')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      "Ask PayU what it knows about this booking's transaction right now (read-only, changes nothing)",
+    description:
+      'Calls PayU verify_payment with the loaded test credentials. Use it to see a payment that is still pending at PayU, or one whose browser return never reached us. It does NOT update our booking or transaction.',
+  })
+  async verify(@Param('reference') reference: string) {
+    if (!REFERENCE_PATTERN.test(reference)) throw notFound();
+    const booking = await this.prisma.booking.findUnique({
+      where: { reference },
+      select: {
+        status: true,
+        transaction: { select: { orderId: true, status: true } },
+      },
+    });
+    if (!booking) throw notFound();
+    if (!booking.transaction) {
+      throw new AppException(
+        'NO_TRANSACTION',
+        'This booking has no transaction yet: open its checkout page first',
+        HttpStatus.CONFLICT,
+      );
+    }
+    try {
+      const payu = await this.payu.verifyPayment(booking.transaction.orderId);
+      return {
+        reference,
+        orderId: booking.transaction.orderId,
+        ourTransactionStatus: booking.transaction.status,
+        ourBookingStatus: booking.status,
+        payu,
+      };
+    } catch (error) {
+      if (error instanceof PayuGatewayError) {
+        throw new AppException(
+          'PAYMENT_GATEWAY_UNAVAILABLE',
+          error.message,
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      throw error;
+    }
   }
 
   private async createForm(reference: string): Promise<CheckoutForm> {
