@@ -37,4 +37,35 @@ describe('envSchema', () => {
   it('rejects a non-numeric PORT', () => {
     expect(() => envSchema.parse({ ...validEnv, PORT: 'not-a-port' })).toThrow();
   });
+
+  describe('PayU config', () => {
+    it('defaults PAYU_ENV to test and allows missing credentials in development', () => {
+      const result = envSchema.parse(validEnv);
+      expect(result.PAYU_ENV).toBe('test');
+      expect(result.PAYU_KEY).toBeUndefined();
+      expect(result.PAYU_SALT).toBeUndefined();
+    });
+
+    it.each(['staging', 'production'])('requires PAYU_KEY and PAYU_SALT when NODE_ENV is %s', (nodeEnv) => {
+      expect(() => envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv })).toThrow();
+      expect(() => envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, PAYU_KEY: 'k' })).toThrow();
+      expect(() => envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, PAYU_SALT: 's' })).toThrow();
+      expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, PAYU_KEY: 'k', PAYU_SALT: 's' }).PAYU_KEY).toBe('k');
+    });
+
+    it('rejects empty credential strings', () => {
+      expect(() => envSchema.parse({ ...validEnv, PAYU_KEY: '' })).toThrow();
+    });
+
+    it('rejects an unknown PAYU_ENV', () => {
+      expect(() => envSchema.parse({ ...validEnv, PAYU_ENV: 'sandbox' })).toThrow();
+    });
+
+    it('only allows PAYU_ENV=live in production', () => {
+      const creds = { PAYU_KEY: 'k', PAYU_SALT: 's', PAYU_ENV: 'live' };
+      expect(() => envSchema.parse({ ...validEnv, ...creds })).toThrow();
+      expect(() => envSchema.parse({ ...validEnv, ...creds, NODE_ENV: 'staging' })).toThrow();
+      expect(envSchema.parse({ ...validEnv, ...creds, NODE_ENV: 'production' }).PAYU_ENV).toBe('live');
+    });
+  });
 });
