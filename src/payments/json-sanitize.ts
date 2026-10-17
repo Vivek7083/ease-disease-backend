@@ -5,7 +5,8 @@ const NUL = '\u0000';
 /** Postgres `jsonb` rejects the NUL character in strings and keys. We keep it visible as literal text instead. */
 const NUL_TEXT = '\\u0000';
 
-const cleanString = (value: string): string => (value.includes(NUL) ? value.replaceAll(NUL, NUL_TEXT) : value);
+export const cleanJsonbString = (value: string): string => (value.includes(NUL) ? value.replaceAll(NUL, NUL_TEXT) : value);
+const cleanString = cleanJsonbString;
 
 /**
  * Makes an arbitrary received value safe to store in a `jsonb` column, without throwing.

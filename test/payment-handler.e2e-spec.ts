@@ -234,7 +234,15 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
       expect(result.outcome).toBe('unknown_transaction');
       expect(await snapshot(prisma)).toEqual(before);
       const [event] = await events();
-      expect(event!.payload).toEqual(hostile);
+      // Allowlisted fields as plain text; everything else is only a field NAME.
+      expect(event!.payload).toEqual({
+        txnid: sql,
+        status: "' OR '1'='1",
+        amount: '1; DELETE FROM bookings',
+        udf1: '"; TRUNCATE users; --',
+        hash: "x' UNION SELECT * FROM users --",
+        _receivedFields: ['txnid', 'status', 'amount', 'udf1', 'email', 'firstname', 'hash', sql, 'nested'],
+      });
       expect(await prisma.$queryRaw`SELECT to_regclass('public.transactions')::text AS t`).toEqual([{ t: 'transactions' }]);
     });
 
@@ -242,28 +250,64 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
       await createCheckoutFixture(prisma);
       const result = await handle(signedPayload({ firstname: sql, email: `${sql}@x.com`, productinfo: sql }));
       expect(result.outcome).toBe('not_found_at_payu');
-      expect((await events())[0]!.payload).toMatchObject({ firstname: sql, productinfo: sql });
+      const payload = (await events())[0]!.payload as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('firstname');
+      expect(payload).not.toHaveProperty('productinfo');
+      expect(payload['_receivedFields']).toEqual(expect.arrayContaining(['firstname', 'email', 'productinfo']));
       expect(await prisma.transaction.count()).toBe(1);
+    });
+
+    it('verifies the hash on the FULL payload, then stores no personal data (valid signal)', async () => {
+      await createCheckoutFixture(prisma);
+      const full = {
+        ...signedPayload(),
+        phone: '9876543210',
+        lastname: 'Sharma',
+        address1: '12 Hidden Street',
+        city: 'Mumbai',
+        cardnum: '401200XXXXXX1112',
+        name_on_card: 'PRIYA SHARMA',
+      };
+
+      const result = await handle(full);
+
+      expect(result.outcome).toBe('not_found_at_payu'); // reached the PayU check, so the signature verified on the full payload
+      const [event] = await events();
+      expect(event).toMatchObject({ hashValid: true });
+      const text = JSON.stringify(event!.payload);
+      for (const secret of ['priya@example.com', 'Priya', '9876543210', 'Sharma', '12 Hidden Street', 'Mumbai', '401200XXXXXX1112', 'PRIYA SHARMA']) {
+        expect(text, secret).not.toContain(secret);
+      }
+      expect(event!.payload).toMatchObject({ txnid: TXNID, status: 'success', amount: '2499.00', udf1: REFERENCE, mode: 'UPI' });
+      // and in the database itself, not just as read back by Prisma
+      const raw = await prisma.$queryRaw<{ t: string }[]>`SELECT payload::text AS t FROM payment_events`;
+      expect(raw[0]!.t).not.toContain('priya@example.com');
+    });
+
+    it('also strips personal data from a signal with an invalid hash and from one for an unknown transaction', async () => {
+      await createCheckoutFixture(prisma);
+      await handle({ ...signedPayload(), amount: '1.00', phone: '9876543210' });
+      await handle({ ...signedPayload({ txnid: 'EDTX01JBUNKNOWNTXN00001' }), cardnum: '401200XXXXXX1112' });
+      const all = JSON.stringify((await events()).map((e) => e.payload));
+      for (const secret of ['priya@example.com', 'Priya', '9876543210', '401200XXXXXX1112']) expect(all, secret).not.toContain(secret);
     });
 
     it('survives NUL characters (which jsonb cannot hold) by keeping them as visible text', async () => {
       await createCheckoutFixture(prisma);
       const result = await handle({ txnid: 'EDTX01\u0000X', 'k\u0000ey': 'v\u0000alue' });
       expect(result.outcome).toBe('unknown_transaction');
-      expect((await events())[0]!.payload).toEqual({ txnid: 'EDTX01\\u0000X', 'k\\u0000ey': 'v\\u0000alue' });
+      expect((await events())[0]!.payload).toEqual({ txnid: 'EDTX01\\u0000X', _receivedFields: ['txnid', 'k\\u0000ey'] });
     });
 
-    it('stores a non-object body wrapped, so nothing is lost', async () => {
-      await handle('plain text body');
-      expect((await events())[0]!.payload).toEqual({ _raw: 'plain text body' });
+    it('stores only the kind of a non-object body, never its text', async () => {
+      await handle('plain text body with priya@example.com');
+      expect((await events())[0]!.payload).toEqual({ _nonObject: 'string', _receivedFields: [] });
     });
 
-    it('keeps only a preview of an oversized payload', async () => {
+    it('stores a huge payload as a small event: the big field is only a name', async () => {
       await handle({ txnid: TXNID, blob: 'x'.repeat(200_000) });
       const payload = (await events())[0]!.payload as Record<string, unknown>;
-      expect(payload['_truncated']).toBe(true);
-      expect(payload['_length']).toBeGreaterThan(200_000);
-      expect(String(payload['_preview']).length).toBe(2000);
+      expect(payload).toEqual({ txnid: TXNID, _receivedFields: ['txnid', 'blob'] });
     });
 
     it('survives absurdly deep nesting', async () => {

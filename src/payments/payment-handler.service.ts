@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { BookingStatus, Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { AppException } from '../common/exceptions/app.exception.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { sanitizeForJsonb } from './json-sanitize.js';
+import { minimiseEventPayload } from './payment-event-payload.js';
 import { PayuClient, PayuGatewayError, type PayuVerifyResult } from './payu/payu-client.js';
 import { PayuCredentialsProvider } from './payu/payu-credentials.provider.js';
 import { parseAmountToPaise, verifyResponseHash } from './payu/payu-hash.js';
@@ -47,7 +47,6 @@ export interface HandleResult {
 
 // Our txnids are `EDTX` + ULID (<= 25 chars). The charset also keeps `|` and anything odd out of every query.
 const TXNID_PATTERN = /^[A-Za-z0-9_-]{1,25}$/;
-const MAX_STORED_PAYLOAD_CHARS = 100_000;
 const MAX_IP_CHARS = 45;
 
 /** Booking states a successful payment may move to CONFIRMED. Anything else that is not already settled needs a human. */
@@ -113,7 +112,8 @@ export class PaymentHandlerService {
         transactionId: transaction?.id ?? null,
         source: input.source,
         hashValid: hashCheck.valid,
-        payload: storablePayload(input.payload),
+        // The hash above was checked on the full payload; only the allowlisted fields are kept (see payment-event-payload.ts).
+        payload: minimiseEventPayload(input.payload),
         sourceIp: normaliseIp(input.sourceIp),
       },
       select: { id: true },
@@ -372,16 +372,6 @@ function bookingFacts(booking: KnownTransaction['booking']) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** The payload exactly as received, made storable; oversize payloads keep only a preview. */
-function storablePayload(raw: unknown) {
-  const sanitised = sanitizeForJsonb(raw);
-  const asText = JSON.stringify(sanitised);
-  if (asText.length <= MAX_STORED_PAYLOAD_CHARS) {
-    return isPlainObject(sanitised) ? sanitised : { _raw: sanitised };
-  }
-  return { _truncated: true, _length: asText.length, _preview: asText.slice(0, 2000) };
 }
 
 function normaliseIp(ip: string | null): string | null {
