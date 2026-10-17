@@ -58,6 +58,21 @@ describe('/healthz (e2e)', () => {
   // (confirmed by running it — the query silently succeeds). That path is covered as a real
   // unit test instead, with a mocked PrismaService: see ../src/health/health.service.spec.ts.
 
+  describe('internal tick, in the real application wiring', () => {
+    it('POST /v1/internal/tick exists and refuses callers without a valid scheduler token (fails closed)', async () => {
+      for (const header of [undefined, 'Bearer aaa.bbb.ccc']) {
+        const req = request(app.getHttpServer()).post('/v1/internal/tick');
+        const response = await (header ? req.set('Authorization', header) : req).expect(401);
+        expect(response.body.error).toMatchObject({ code: 'UNAUTHENTICATED' });
+      }
+    });
+
+    it('POST /dev/tick is hidden outside development', async () => {
+      const response = await request(app.getHttpServer()).post('/dev/tick').expect(404);
+      expect(response.body.error.code).toBe('NOT_FOUND');
+    });
+  });
+
   it('maps an unknown route to the locked error envelope shape', async () => {
     const response = await request(app.getHttpServer()).get('/this-route-does-not-exist').expect(404);
 
