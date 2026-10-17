@@ -10,12 +10,14 @@ import {
 import { PaymentsDevController } from './dev/payments-dev.controller.js';
 import { PayuModule } from './payu/payu.module.js';
 import { generateTxnid } from './payu/payu-txnid.js';
+import { ReconcileService } from './reconcile.service.js';
 
 @Module({
   imports: [PayuModule],
   controllers: [PaymentsController, PaymentsDevController],
   providers: [
     PaymentHandlerService,
+    ReconcileService,
     CheckoutService,
     { provide: TXNID_GENERATOR, useValue: () => generateTxnid() },
     {
@@ -24,6 +26,6 @@ import { generateTxnid } from './payu/payu-txnid.js';
         new SlidingWindowLimiter(PAYU_SIGNAL_LIMIT_PER_MINUTE, 60_000),
     },
   ],
-  exports: [PaymentHandlerService, CheckoutService],
+  exports: [PaymentHandlerService, ReconcileService, CheckoutService],
 })
 export class PaymentsModule {}
