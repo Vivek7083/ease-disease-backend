@@ -103,6 +103,38 @@ describe('payment events integrity and booking/transaction rules (real Postgres)
       expect(read.verification).toBeNull();
     });
 
+    describe('hash_valid is NULL only for RECONCILE events (unsigned source)', () => {
+      const unsigned = (source: string) => prisma.paymentEvent.create({ data: { source, hashValid: null, payload: { txnid: 'T1' } } });
+
+      it('accepts a RECONCILE event with no hash result, and lets its verification be set', async () => {
+        const event = await unsigned('RECONCILE');
+        expect(event.hashValid).toBeNull();
+        const updated = await prisma.paymentEvent.update({ where: { id: event.id }, data: { verification } });
+        expect(updated.hashValid).toBeNull();
+        expect(updated.verification).toEqual(verification);
+      });
+
+      it.each(['RETURN', 'WEBHOOK', 'ANYTHING_ELSE'])('rejects a %s event with no hash result', async (source) => {
+        await expect(unsigned(source)).rejects.toThrow();
+        expect(await prisma.paymentEvent.count()).toBe(0);
+      });
+
+      it.each([true, false])('rejects turning a NULL hash result into %s after the fact', async (value) => {
+        const event = await unsigned('RECONCILE');
+        await expect(
+          prisma.paymentEvent.update({ where: { id: event.id }, data: { hashValid: value, verification } }),
+        ).rejects.toThrow(/append-only/);
+        expect((await prisma.paymentEvent.findUniqueOrThrow({ where: { id: event.id } })).hashValid).toBeNull();
+      });
+
+      it('rejects blanking a recorded hash result to NULL', async () => {
+        const event = await prisma.paymentEvent.create({ data: { source: 'RECONCILE', hashValid: true, payload: { txnid: 'T1' } } });
+        await expect(
+          prisma.paymentEvent.update({ where: { id: event.id }, data: { hashValid: null, verification } }),
+        ).rejects.toThrow(/append-only/);
+      });
+    });
+
     it('rejects an update that changes only the payload', async () => {
       const event = await makeEvent();
       await expect(

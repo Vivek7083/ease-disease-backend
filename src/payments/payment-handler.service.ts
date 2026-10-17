@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { minimiseEventPayload } from './payment-event-payload.js';
 import { PayuClient, PayuGatewayError, type PayuVerifyResult } from './payu/payu-client.js';
 import { PayuCredentialsProvider } from './payu/payu-credentials.provider.js';
-import { parseAmountToPaise, verifyResponseHash } from './payu/payu-hash.js';
+import { formatAmountPaise, parseAmountToPaise, verifyResponseHash } from './payu/payu-hash.js';
 
 export type PaymentSource = 'RETURN' | 'WEBHOOK' | 'RECONCILE';
 
@@ -91,18 +91,7 @@ export class PaymentHandlerService {
     const txnid = payload && typeof payload['txnid'] === 'string' && TXNID_PATTERN.test(payload['txnid']) ? payload['txnid'] : null;
 
     // Read-only lookup, so the event can reference its transaction. Nothing is written before the event.
-    const transaction: KnownTransaction | null = txnid
-      ? await this.prisma.transaction.findUnique({
-          where: { orderId: txnid },
-          select: {
-            id: true,
-            orderId: true,
-            status: true,
-            amountPaise: true,
-            booking: { select: { id: true, reference: true, status: true, packageTitle: true, amountPaise: true } },
-          },
-        })
-      : null;
+    const transaction: KnownTransaction | null = txnid ? await this.findTransaction(txnid) : null;
 
     // Pure computation, no I/O.
     const hashCheck = this.checkHash(payload);
@@ -168,8 +157,81 @@ export class PaymentHandlerService {
     }
 
     const payloadPaise = parseAmountToPaise(String(payload['amount']));
-    const amountMatches = paid.amountPaise === transaction.amountPaise && payloadPaise === transaction.amountPaise;
-    const checks = { referenceMatches: true, amountMatches };
+    const settled = await this.settle({ txnid, transaction, paid, payloadPaise, source: input.source });
+    return finish(settled.outcome, { checks: { referenceMatches: true, ...settled.checks }, payuVerify: settled.payuVerify });
+  }
+
+  /**
+   * Reconcile entry point: PayU's own `verify_payment` answer is the only input. It is not hash-signed (we asked
+   * PayU over HTTPS with our own key and hash), so there is no reverse-hash step and no payload to cross-check;
+   * the txnid is re-validated and the amount PayU reports is still compared with ours. State changes go through
+   * exactly the same guarded updates as `handle()`, so reconcile racing a webhook or a replay changes nothing twice.
+   * Gateway errors change nothing and write no event (no answer to record).
+   */
+  async reconcile(txnid: string): Promise<HandleResult> {
+    if (typeof txnid !== 'string' || !TXNID_PATTERN.test(txnid)) {
+      return { outcome: 'unknown_transaction', bookingReference: null };
+    }
+    const transaction = await this.findTransaction(txnid);
+    if (!transaction) return { outcome: 'unknown_transaction', bookingReference: null };
+    const bookingReference = transaction.booking.reference;
+
+    const answer = await this.askPayu(txnid);
+    if (!answer.ok) {
+      this.logger.error(`verify_payment failed for ${txnid} (RECONCILE): ${answer.error}`);
+      return { outcome: 'gateway_error', bookingReference };
+    }
+    const paid = answer.result;
+
+    const event = await this.prisma.paymentEvent.create({
+      data: {
+        transactionId: transaction.id,
+        source: 'RECONCILE',
+        hashValid: null,
+        payload: minimiseEventPayload(reconcilePayload(txnid, paid)),
+        sourceIp: null,
+      },
+      select: { id: true },
+    });
+    const finish = async (outcome: HandleOutcome, extra: { checks?: Record<string, boolean>; payuVerify: Prisma.InputJsonValue }) => {
+      await this.prisma.paymentEvent.update({
+        where: { id: event.id },
+        data: {
+          verification: {
+            hash: { valid: null, variant: null, reason: 'unsigned_source' },
+            payuVerify: extra.payuVerify,
+            checks: extra.checks ?? {},
+            result: outcome,
+            handledAt: new Date().toISOString(),
+          },
+        },
+      });
+      return { outcome, bookingReference };
+    };
+
+    if (paid.outcome === 'not_found') {
+      this.logger.warn(`PayU does not know ${txnid} (RECONCILE)`);
+      return finish('not_found_at_payu', { payuVerify: { outcome: 'not_found' } });
+    }
+    const settled = await this.settle({ txnid, transaction, paid, payloadPaise: 'none', source: 'RECONCILE' });
+    return finish(settled.outcome, { checks: settled.checks, payuVerify: settled.payuVerify });
+  }
+
+  /**
+   * Shared back half: PayU's answer decides. `payloadPaise` is the amount the (hash-valid) payload claimed: a number,
+   * or null when that amount is malformed (never a match). 'none' means there is no payload (reconcile), so only
+   * PayU's amount is compared. Never reads anything else from a payload.
+   */
+  private async settle(args: {
+    txnid: string;
+    transaction: KnownTransaction;
+    paid: Extract<PayuVerifyResult, { outcome: 'found' }>;
+    payloadPaise: number | null | 'none';
+    source: PaymentSource;
+  }): Promise<{ outcome: HandleOutcome; checks: { amountMatches: boolean }; payuVerify: Prisma.InputJsonValue }> {
+    const { txnid, transaction, paid, payloadPaise, source } = args;
+    const amountMatches = paid.amountPaise === transaction.amountPaise && (payloadPaise === 'none' || payloadPaise === transaction.amountPaise);
+    const checks = { amountMatches };
     const payuVerify: Prisma.InputJsonValue = {
       outcome: 'found',
       status: paid.status,
@@ -180,8 +242,8 @@ export class PaymentHandlerService {
     };
 
     if (paid.status === 'unknown') {
-      this.logger.warn(`PayU reported an unrecognised status "${paid.rawStatus}" for ${txnid}; changing nothing`);
-      return finish('not_found_at_payu', { checks, payuVerify });
+      this.logger.warn(`PayU reported an unrecognised status "${paid.rawStatus}" for ${txnid} (${source}); changing nothing`);
+      return { outcome: 'not_found_at_payu', checks, payuVerify };
     }
 
     const verified: Verified = { txnid, transaction, paid };
@@ -193,7 +255,20 @@ export class PaymentHandlerService {
     } else {
       outcome = await this.applyFailure(verified);
     }
-    return finish(outcome, { checks, payuVerify });
+    return { outcome, checks, payuVerify };
+  }
+
+  private findTransaction(txnid: string): Promise<KnownTransaction | null> {
+    return this.prisma.transaction.findUnique({
+      where: { orderId: txnid },
+      select: {
+        id: true,
+        orderId: true,
+        status: true,
+        amountPaise: true,
+        booking: { select: { id: true, reference: true, status: true, packageTitle: true, amountPaise: true } },
+      },
+    });
   }
 
   /** PayU says success and the amount matches: transaction SUCCESS, booking CONFIRMED, alerts queued. */
@@ -368,6 +443,23 @@ function bookingFacts(booking: KnownTransaction['booking']) {
     packageTitle: booking.packageTitle,
     amountPaise: booking.amountPaise,
   };
+}
+
+/** PayU's answer rewritten as the flat fields a callback would carry, so the stored event looks like the others (and is allowlisted the same way). */
+function reconcilePayload(txnid: string, paid: PayuVerifyResult): Record<string, string> {
+  if (paid.outcome === 'not_found') return { txnid };
+  const fields: Record<string, string | null> = {
+    txnid,
+    mihpayid: paid.mihpayid,
+    status: paid.rawStatus,
+    unmappedstatus: paid.unmappedStatus,
+    amount: formatAmountPaise(paid.amountPaise),
+    mode: paid.mode,
+    bank_ref_num: paid.bankRefNum,
+    error: paid.errorCode,
+    error_Message: paid.errorMessage,
+  };
+  return Object.fromEntries(Object.entries(fields).filter((entry): entry is [string, string] => entry[1] !== null));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

@@ -151,7 +151,8 @@ model PaymentEvent {
   transactionId String?  @map("transaction_id") @db.Uuid
   /// RETURN | WEBHOOK | RECONCILE
   source        String
-  hashValid     Boolean  @map("hash_valid")
+  /// true / false for signed callbacks and webhooks. NULL only for RECONCILE (PayU's unsigned verify_payment answer, nothing to check).
+  hashValid     Boolean? @map("hash_valid")
   /// Raw payload exactly as received.
   payload       Json     @db.JsonB
   receivedAt    DateTime @default(now()) @map("received_at") @db.Timestamptz(3)
