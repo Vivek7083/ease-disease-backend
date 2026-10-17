@@ -31,6 +31,15 @@ export const envSchema = z
      * PayU's hosted-checkout docs require a public https URL, so outside development it must be https.
      */
     API_PUBLIC_URL: originUrl().optional(),
+    /**
+     * Cloud Scheduler's OIDC token must carry exactly this audience (the API address it calls) and come from exactly
+     * this service account. Both are required outside development; if either is missing the tick endpoint rejects everyone.
+     */
+    TICK_AUDIENCE: z.url().optional(),
+    TICK_SERVICE_ACCOUNT_EMAIL: z
+      .email()
+      .transform((value) => value.toLowerCase())
+      .optional(),
     /** Number of trusted reverse proxies in front of the app, so `req.ip` is the real client. */
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   })
@@ -51,6 +60,20 @@ export const envSchema = z
           ctx.addIssue({ code: 'custom', path: [name], message: `${name} must use https outside development` });
         }
       }
+    }
+    // The reconcile tick is authenticated by Google-signed tokens: never boot without knowing whose.
+    if (env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') {
+      for (const name of ['TICK_AUDIENCE', 'TICK_SERVICE_ACCOUNT_EMAIL'] as const) {
+        if (!env[name]) {
+          ctx.addIssue({ code: 'custom', path: [name], message: `${name} is required when NODE_ENV is ${env.NODE_ENV}` });
+        }
+      }
+      if (env.TICK_AUDIENCE && !env.TICK_AUDIENCE.startsWith('https://')) {
+        ctx.addIssue({ code: 'custom', path: ['TICK_AUDIENCE'], message: 'TICK_AUDIENCE must use https outside development' });
+      }
+    } else if (Boolean(env.TICK_AUDIENCE) !== Boolean(env.TICK_SERVICE_ACCOUNT_EMAIL)) {
+      const missing = env.TICK_AUDIENCE ? 'TICK_SERVICE_ACCOUNT_EMAIL' : 'TICK_AUDIENCE';
+      ctx.addIssue({ code: 'custom', path: [missing], message: 'TICK_AUDIENCE and TICK_SERVICE_ACCOUNT_EMAIL must be set together' });
     }
     // Live PayU is production-only, so a staging/dev box can't take real money by misconfiguration.
     if (env.PAYU_ENV === 'live' && env.NODE_ENV !== 'production') {

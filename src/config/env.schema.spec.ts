@@ -8,6 +8,9 @@ describe('envSchema', () => {
     DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
   };
 
+  /** What a deployed (staging / production) environment must also carry, so other tests can isolate their own variable. */
+  const TICK = { TICK_AUDIENCE: 'https://api.easedisease.in', TICK_SERVICE_ACCOUNT_EMAIL: 'scheduler@easedisease-prod.iam.gserviceaccount.com' };
+
   it('accepts a fully valid config and coerces PORT to a number', () => {
     const result = envSchema.parse(validEnv);
     expect(result.PORT).toBe(3000);
@@ -39,7 +42,7 @@ describe('envSchema', () => {
   });
 
   describe('FRONTEND_BASE_URL and TRUST_PROXY_HOPS', () => {
-    const prod = { ...validEnv, NODE_ENV: 'production', PAYU_KEY: 'k', PAYU_SALT: 's', API_PUBLIC_URL: 'https://api.easedisease.in' };
+    const prod = { ...validEnv, NODE_ENV: 'production', PAYU_KEY: 'k', PAYU_SALT: 's', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK };
 
     it('are optional in development and default TRUST_PROXY_HOPS to 0', () => {
       const result = envSchema.parse(validEnv);
@@ -87,7 +90,7 @@ describe('envSchema', () => {
   });
 
   describe('API_PUBLIC_URL', () => {
-    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in' };
+    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in', ...TICK };
 
     it('is optional in development', () => {
       expect(envSchema.parse(validEnv).API_PUBLIC_URL).toBeUndefined();
@@ -126,7 +129,7 @@ describe('envSchema', () => {
 
     it.each(['staging', 'production'])('requires PAYU_KEY and PAYU_SALT when NODE_ENV is %s', (nodeEnv) => {
       // A valid FRONTEND_BASE_URL is always present here, so only the PayU credentials can be the reason for a failure.
-      const deployed = { ...validEnv, NODE_ENV: nodeEnv, FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in' };
+      const deployed = { ...validEnv, NODE_ENV: nodeEnv, FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK };
       expect(() => envSchema.parse(deployed)).toThrow(/PAYU_KEY/);
       expect(() => envSchema.parse({ ...deployed, PAYU_KEY: 'k' })).toThrow(/PAYU_SALT/);
       expect(() => envSchema.parse({ ...deployed, PAYU_SALT: 's' })).toThrow(/PAYU_KEY/);
@@ -143,10 +146,49 @@ describe('envSchema', () => {
 
     it('only allows PAYU_ENV=live in production', () => {
       const creds = { PAYU_KEY: 'k', PAYU_SALT: 's', PAYU_ENV: 'live' };
-      const frontend = { FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in' };
+      const frontend = { FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK };
       expect(() => envSchema.parse({ ...validEnv, ...creds })).toThrow(/PAYU_ENV=live/);
       expect(() => envSchema.parse({ ...validEnv, ...creds, ...frontend, NODE_ENV: 'staging' })).toThrow(/PAYU_ENV=live/);
       expect(envSchema.parse({ ...validEnv, ...creds, ...frontend, NODE_ENV: 'production' }).PAYU_ENV).toBe('live');
+    });
+  });
+
+  describe('tick (Cloud Scheduler OIDC) config', () => {
+    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in' };
+
+    it('is optional in development and test', () => {
+      for (const NODE_ENV of ['development', 'test']) {
+        const result = envSchema.parse({ ...validEnv, NODE_ENV });
+        expect(result.TICK_AUDIENCE).toBeUndefined();
+        expect(result.TICK_SERVICE_ACCOUNT_EMAIL).toBeUndefined();
+      }
+    });
+
+    it.each(['staging', 'production'])('requires both variables when NODE_ENV is %s', (nodeEnv) => {
+      const env = { ...deployed, NODE_ENV: nodeEnv };
+      expect(() => envSchema.parse(env)).toThrow(/TICK_AUDIENCE/);
+      expect(() => envSchema.parse({ ...env, TICK_AUDIENCE: TICK.TICK_AUDIENCE })).toThrow(/TICK_SERVICE_ACCOUNT_EMAIL/);
+      expect(() => envSchema.parse({ ...env, TICK_SERVICE_ACCOUNT_EMAIL: TICK.TICK_SERVICE_ACCOUNT_EMAIL })).toThrow(/TICK_AUDIENCE/);
+      expect(envSchema.parse({ ...env, ...TICK }).TICK_AUDIENCE).toBe(TICK.TICK_AUDIENCE);
+    });
+
+    it.each(['staging', 'production'])('requires an https audience in %s', (nodeEnv) => {
+      expect(() => envSchema.parse({ ...deployed, ...TICK, NODE_ENV: nodeEnv, TICK_AUDIENCE: 'http://api.easedisease.in' })).toThrow(/TICK_AUDIENCE must use https/);
+    });
+
+    it('outside deployed environments the two must be set together', () => {
+      expect(() => envSchema.parse({ ...validEnv, TICK_AUDIENCE: 'http://localhost:3000' })).toThrow(/TICK_SERVICE_ACCOUNT_EMAIL/);
+      expect(() => envSchema.parse({ ...validEnv, TICK_SERVICE_ACCOUNT_EMAIL: TICK.TICK_SERVICE_ACCOUNT_EMAIL })).toThrow(/TICK_AUDIENCE/);
+      expect(envSchema.parse({ ...validEnv, TICK_AUDIENCE: 'http://localhost:3000', TICK_SERVICE_ACCOUNT_EMAIL: TICK.TICK_SERVICE_ACCOUNT_EMAIL }).TICK_AUDIENCE).toBe('http://localhost:3000');
+    });
+
+    it('lower-cases the service account email, and rejects things that are not emails or URLs', () => {
+      expect(envSchema.parse({ ...validEnv, ...TICK, TICK_SERVICE_ACCOUNT_EMAIL: 'Scheduler@EaseDisease-Prod.iam.gserviceaccount.com' }).TICK_SERVICE_ACCOUNT_EMAIL).toBe(
+        'scheduler@easedisease-prod.iam.gserviceaccount.com',
+      );
+      expect(() => envSchema.parse({ ...validEnv, ...TICK, TICK_SERVICE_ACCOUNT_EMAIL: 'not-an-email' })).toThrow();
+      expect(() => envSchema.parse({ ...validEnv, ...TICK, TICK_AUDIENCE: 'not a url' })).toThrow();
+      expect(() => envSchema.parse({ ...validEnv, ...TICK, TICK_AUDIENCE: '' })).toThrow();
     });
   });
 });
