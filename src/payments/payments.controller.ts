@@ -12,6 +12,7 @@ import { PaymentHandlerService } from './payment-handler.service.js';
 export const PAYU_SIGNAL_LIMITER = Symbol('PAYU_SIGNAL_LIMITER');
 export const PAYU_SIGNAL_LIMIT_PER_MINUTE = 120;
 
+// We will be using this schema to store transactoin details and will track it along with the bookings so that there would be a proper mapping 
 const PAYU_FIELDS_SCHEMA = {
   type: 'object',
   description:
