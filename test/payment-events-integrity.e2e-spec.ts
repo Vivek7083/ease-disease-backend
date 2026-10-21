@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
+import { CONSULTEE } from './helpers/booking-contact.js';
 import { createTestPrisma, truncateAll } from './helpers/test-db.js';
 
 /**
@@ -25,7 +26,7 @@ describe('payment events integrity and booking/transaction rules (real Postgres)
     });
     const pkg = await prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 249900 } });
     return prisma.booking.create({
-      data: { reference, userId: user.id, packageId: pkg.id, packageTitle: 'Pkg', amountPaise: 249900, patientName: 'Priya', consentAt: new Date() },
+      data: { reference, userId: user.id, packageId: pkg.id, packageTitle: 'Pkg', amountPaise: 249900, ...CONSULTEE, consentAt: new Date() },
     });
   };
   const makeTransaction = (bookingId: string, userId: string, orderId = 'EDTX01JBTESTTXN000000001') =>

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BookingStatus, PrismaClient, TransactionStatus } from '../../src/generated/prisma/client.js';
 import { computeResponseHash } from '../../src/payments/payu/payu-hash.js';
+import { CONSULTEE } from './booking-contact.js';
 
 /** Fake credentials: used everywhere in tests, never real ones. */
 export const CREDS = { key: 'test_key', salt: 'test_salt', env: 'test' as const };
@@ -101,7 +102,7 @@ export async function createBookingFixture(prisma: PrismaClient, options: Bookin
       status: bookingStatus,
       packageTitle,
       amountPaise,
-      patientName: 'Priya Sharma',
+      ...CONSULTEE,
       notes,
       consentAt: new Date(),
     },

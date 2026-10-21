@@ -166,10 +166,11 @@ There is no slot endpoint: booking is package + assessment details, and the expe
   "notes": "Bloating after meals", "consent": true }
 ```
 - `gender` and `notes` are optional. `gender` is free text (trimmed, max 50 chars, empty becomes null). Every other field above is required.
+- Stored in the `bookings.consultee_*` columns (`consultee_name`, `consultee_whatsapp_number`, `consultee_email`, `consultee_age`, `consultee_city`, `consultee_gender`); "consultee" is the person the consultation is for. The JSON field names stay `name`, `whatsappNumber`, etc.
 - These fields describe **this booking**, not the signed-in account: `name`, `whatsappNumber` and `email` may differ from `users.name`/`phone`/`email` (for example booking for someone else). Nothing is written back to `users`.
 - Server checks, in order:
   1. Package exists and is active.
-  2. Field validation: `whatsappNumber` uses the same Indian-mobile rule as checkout (stored `+91XXXXXXXXXX`); `email` is lower-cased; `age` 1–119 (integer); `city` 2–100 chars; `consent` must be `true`.
+  2. Field validation (trimmed first): `name` 2–100 chars; `whatsappNumber` entered with its country code, any country, stored as E.164 (`+` then 8–15 digits, no spaces); `email` lower-cased, at most 50 characters and in the form PayU accepts (it is sent to PayU and is part of the payment hash); `age` 1–119 (integer); `city` 2–100 chars; `gender` optional free text, 1–50 chars; `consent` must be `true`. The database enforces the limits on every field above except `name` and `consent` as a backstop.
   3. Caller has fewer than 5 bookings currently `PENDING_PAYMENT` (any age, no time window).
   4. Caller has fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day).
   5. Insert the booking inside one DB transaction: `amount_paise` from the package, `consent_at = now`, request IP and user-agent stored.

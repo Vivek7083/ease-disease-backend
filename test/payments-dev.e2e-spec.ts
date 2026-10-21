@@ -121,7 +121,11 @@ describe('dev PayU tooling', () => {
         const body = await fixtureBooking({ name: 'Asha Rao', email: 'asha@example.com', phone: '+919123456789' });
         const booking = await prisma.booking.findUniqueOrThrow({ where: { reference: body.reference }, include: { user: true } });
         expect(booking.user).toMatchObject({ name: 'Asha Rao', email: 'asha@example.com', phone: '+919123456789' });
-        expect(booking.patientName).toBe('Asha Rao');
+        expect(booking).toMatchObject({
+          consulteeName: 'Asha Rao',
+          consulteeWhatsappNumber: '+919123456789',
+          consulteeEmail: 'asha@example.com',
+        });
       });
 
       it('every call is a separate user and booking with its own reference', async () => {
@@ -135,6 +139,10 @@ describe('dev PayU tooling', () => {
       it.each([
         ['an unknown key', { nope: 1 }],
         ['a too-short email', { email: 'a' }],
+        ['an email longer than PayU allows', { email: `${'a'.repeat(45)}@example.com` }],
+        ['an email PayU would reject', { email: 'not an email@example.com' }],
+        ['a phone without a country code', { phone: '9876543210' }],
+        ['a phone with spaces', { phone: '+91 98765 43210' }],
         ['an over-long name', { name: 'x'.repeat(101) }],
         ['a non-string phone', { phone: 123456 }],
       ])('rejects %s with a 400 naming the problem, and creates nothing', async (_name, body) => {
@@ -152,7 +160,7 @@ describe('dev PayU tooling', () => {
       it('stores hostile text as plain data', async () => {
         const name = "'; DROP TABLE bookings; --";
         const body = await fixtureBooking({ name });
-        expect((await prisma.booking.findUniqueOrThrow({ where: { reference: body.reference } })).patientName).toBe(name);
+        expect((await prisma.booking.findUniqueOrThrow({ where: { reference: body.reference } })).consulteeName).toBe(name);
         expect(await prisma.booking.count()).toBe(1);
       });
     });

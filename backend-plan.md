@@ -100,7 +100,7 @@ Conventions: UUID PKs · `timestamptz` (UTC, shown in IST) · money in **paise**
 |---|---|
 | **users** | id, **firebase_uid (unique)**, name, email, phone (E.164), dob?, auth_provider, last_login_at |
 | **packages** | id, slug, title, description, price_paise, currency, duration_minutes, **is_active**, sort_order |
-| **bookings** | id, reference (`ED-7K3QXM`, unique), user_id, package_id, status, **amount_paise (snapshot)**, patient_name (the form's `name`), whatsapp_number, email, age, city, gender? (free text), notes?, consent_at, created_ip?, created_user_agent?. `patient_dob` and `hold_expires_at` exist but are unused |
+| **bookings** | id, reference (`ED-7K3QXM`, unique), user_id, package_id, status, **amount_paise (snapshot)**, **consultee_name, consultee_whatsapp_number (E.164), consultee_email (lower-case, max 50), consultee_age, consultee_city**, consultee_gender? (free text), consultee_dob? (unused), notes?, consent_at, created_ip?, created_user_agent?. `hold_expires_at` exists but is unused. "Consultee" = the person the consultation is for; it may differ from the account (`users`) |
 | **transactions** | id, **order_id (= PayU txnid, unique)**, booking_id (unique: one transaction per booking), user_id, gateway, amount_paise, currency, status, payment_mode, **pg_txn_id (mihpayid)**, bank_ref_num, error_code, error_message, completed_at, created_ip?, created_user_agent? |
 | **payment_events** | id, transaction_id, source (`RETURN` \| `WEBHOOK` \| `RECONCILE`), hash_valid, payload jsonb (raw), received_at. **Append-only** |
 | **notification_recipients** | email, kind (`EXPERT` \| `SHARED_INBOX` \| `ADMIN`), is_active |

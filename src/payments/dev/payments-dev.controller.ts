@@ -27,11 +27,19 @@ const REFERENCE_PATTERN = /^[A-Za-z0-9-]{1,32}$/;
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const MAX_REFERENCE_ATTEMPTS = 5;
 
+const E164_PATTERN = /^\+[1-9][0-9]{7,14}$/;
+const FIXTURE_EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+/** Fixed values for the form fields the fixture user does not have. */
+const FIXTURE_CONSULTEE_AGE = 34;
+const FIXTURE_CONSULTEE_CITY = 'Bengaluru';
+
 const fixtureBody = z
   .object({
     name: z.string().trim().min(1).max(100).optional(),
-    email: z.string().trim().min(3).max(100).optional(),
-    phone: z.string().trim().min(5).max(20).optional(),
+    // The booking copies these into its `consultee_*` columns, which the database constrains (E.164 number,
+    // lower-case email within PayU's 50-character rule), so the same shapes are required here.
+    email: z.string().trim().max(50).regex(FIXTURE_EMAIL_PATTERN, 'Email is not in a form PayU accepts').optional(),
+    phone: z.string().trim().regex(E164_PATTERN, 'Phone must be E.164, e.g. +919876543210').optional(),
   })
   .strict();
 
@@ -131,7 +139,11 @@ export class PaymentsDevController {
             packageId: pkg.id,
             packageTitle: pkg.title,
             amountPaise: pkg.pricePaise,
-            patientName: name,
+            consulteeName: name,
+            consulteeWhatsappNumber: phone,
+            consulteeEmail: email.toLowerCase(),
+            consulteeAge: FIXTURE_CONSULTEE_AGE,
+            consulteeCity: FIXTURE_CONSULTEE_CITY,
             consentAt: new Date(),
           },
           select: {

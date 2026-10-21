@@ -46,7 +46,8 @@ enum BookingStatus {
   NO_SHOW
   EXPIRED
   NEEDS_ATTENTION
-  /// Payment failed or was cancelled at PayU. The user may book again (one active booking per user).
+  /// Payment failed or was cancelled at PayU. Not retried on the same booking in v1 (one transaction per
+  /// booking); the user creates a new booking.
   FAILED
 
   @@map("booking_status")
@@ -82,27 +83,43 @@ model Package {
 }
 
 model Booking {
-  id            String        @id @default(uuid()) @db.Uuid
-  reference     String        @unique
-  userId        String        @map("user_id") @db.Uuid
-  packageId     String        @map("package_id") @db.Uuid
-  status        BookingStatus @default(PENDING_PAYMENT)
+  id                      String        @id @default(uuid()) @db.Uuid
+  reference               String        @unique
+  userId                  String        @map("user_id") @db.Uuid
+  packageId               String        @map("package_id") @db.Uuid
+  status                  BookingStatus @default(PENDING_PAYMENT)
   /// Snapshots taken at creation time: PayU's `productinfo` and the charged amount must not
   /// change if the package is edited later.
-  packageTitle  String        @map("package_title")
-  amountPaise   Int           @map("amount_paise")
-  currency      String        @default("INR")
-  patientName   String        @map("patient_name")
-  patientDob    DateTime?     @map("patient_dob") @db.Date
-  notes         String?
-  consentAt     DateTime      @map("consent_at") @db.Timestamptz(3)
+  packageTitle            String        @map("package_title")
+  amountPaise             Int           @map("amount_paise")
+  currency                String        @default("INR")
+  /// The `consultee_*` columns describe the person the consultation is for, as typed into the booking form.
+  /// They are a snapshot of this booking and may differ from the signed-in account (`users.*`): someone can
+  /// book for a relative. Nothing here is ever written back to `users`. Limits (E.164 number, email shape,
+  /// age and length ranges) are CHECK constraints in the migration `*_booking_contact_fields`.
+  consulteeName           String        @map("consultee_name")
+  /// E.164 with country code, e.g. +919876543210.
+  consulteeWhatsappNumber String        @map("consultee_whatsapp_number")
+  /// Lower-case; within PayU's email rules (max 50 chars) because checkout sends it to PayU.
+  consulteeEmail          String        @map("consultee_email")
+  consulteeAge            Int           @map("consultee_age") @db.SmallInt
+  consulteeCity           String        @map("consultee_city")
+  /// Free text typed by the user, or null when not given.
+  consulteeGender         String?       @map("consultee_gender")
+  /// Unused by the form for now (age is asked instead).
+  consulteeDob            DateTime?     @map("consultee_dob") @db.Date
+  notes                   String?
+  consentAt               DateTime      @map("consent_at") @db.Timestamptz(3)
+  /// Client address and User-Agent of the request that created the booking (chargeback evidence, filled from B3).
+  createdIp               String?       @map("created_ip")
+  createdUserAgent        String?       @map("created_user_agent")
   /// Payment window only (no slot capacity in v1). Null once no longer relevant.
-  holdExpiresAt DateTime?     @map("hold_expires_at") @db.Timestamptz(3)
+  holdExpiresAt           DateTime?     @map("hold_expires_at") @db.Timestamptz(3)
   /// Unused for now: room for the admin dashboard (when the consult is scheduled / what the expert noted).
-  scheduledAt   DateTime?     @map("scheduled_at") @db.Timestamptz(3)
-  expertNotes   String?       @map("expert_notes")
-  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  scheduledAt             DateTime?     @map("scheduled_at") @db.Timestamptz(3)
+  expertNotes             String?       @map("expert_notes")
+  createdAt               DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   user        User         @relation(fields: [userId], references: [id])
   package     Package      @relation(fields: [packageId], references: [id])
@@ -115,24 +132,27 @@ model Booking {
 }
 
 model Transaction {
-  id           String            @id @default(uuid()) @db.Uuid
+  id               String            @id @default(uuid()) @db.Uuid
   /// PayU `txnid`, e.g. EDTX01JB... (<= 25 chars).
-  orderId      String            @unique @map("order_id")
-  bookingId    String            @map("booking_id") @db.Uuid
-  userId       String            @map("user_id") @db.Uuid
-  gateway      String            @default("PAYU")
-  amountPaise  Int               @map("amount_paise")
-  currency     String            @default("INR")
-  status       TransactionStatus @default(CREATED)
-  paymentMode  String?           @map("payment_mode")
+  orderId          String            @unique @map("order_id")
+  bookingId        String            @map("booking_id") @db.Uuid
+  userId           String            @map("user_id") @db.Uuid
+  gateway          String            @default("PAYU")
+  amountPaise      Int               @map("amount_paise")
+  currency         String            @default("INR")
+  status           TransactionStatus @default(CREATED)
+  paymentMode      String?           @map("payment_mode")
   /// PayU `mihpayid`.
-  pgTxnId      String?           @map("pg_txn_id")
-  bankRefNum   String?           @map("bank_ref_num")
-  errorCode    String?           @map("error_code")
-  errorMessage String?           @map("error_message")
-  completedAt  DateTime?         @map("completed_at") @db.Timestamptz(3)
-  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  pgTxnId          String?           @map("pg_txn_id")
+  bankRefNum       String?           @map("bank_ref_num")
+  errorCode        String?           @map("error_code")
+  errorMessage     String?           @map("error_message")
+  completedAt      DateTime?         @map("completed_at") @db.Timestamptz(3)
+  /// Client address and User-Agent of the checkout request that created this transaction (chargeback evidence, filled from B3).
+  createdIp        String?           @map("created_ip")
+  createdUserAgent String?           @map("created_user_agent")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   booking Booking        @relation(fields: [bookingId], references: [id])
   user    User           @relation(fields: [userId], references: [id])

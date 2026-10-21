@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { SEED_PACKAGE, SEED_PACKAGE_ID, seedPackage } from '../src/seed/seed-package.js';
+import { CONSULTEE } from './helpers/booking-contact.js';
 import { createTestPrisma, testDatabaseUrl, truncateAll } from './helpers/test-db.js';
 
 /**
@@ -31,7 +32,7 @@ describe('PayU spike schema (real Postgres)', () => {
     packageId,
     packageTitle: 'Pkg',
     amountPaise: 150000,
-    patientName: 'Priya',
+    ...CONSULTEE,
     consentAt: new Date(),
   });
   const makeBooking = async (reference?: string) => {
@@ -217,10 +218,10 @@ describe('PayU spike schema (real Postgres)', () => {
       const user = await makeUser();
       const pkg = await makePackage();
       const booking = await prisma.booking.create({
-        data: { ...bookingData(user.id, pkg.id), patientDob: new Date('1990-04-12') },
+        data: { ...bookingData(user.id, pkg.id), consulteeDob: new Date('1990-04-12') },
       });
       const read = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
-      expect(read.patientDob?.toISOString().slice(0, 10)).toBe('1990-04-12');
+      expect(read.consulteeDob?.toISOString().slice(0, 10)).toBe('1990-04-12');
     });
   });
 
