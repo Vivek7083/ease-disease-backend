@@ -1,4 +1,5 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { AuthModule } from './auth/auth.module.js';
 import { ConfigModule } from './config/config.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { HealthModule } from './health/health.module.js';
@@ -7,7 +8,7 @@ import { PaymentsModule } from './payments/payments.module.js';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware.js';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, HealthModule, PaymentsModule, InternalModule],
+  imports: [ConfigModule, PrismaModule, AuthModule, HealthModule, PaymentsModule, InternalModule],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {

@@ -283,8 +283,8 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | HTTP | code | When |
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | Bad input; `details.fields` maps field → message |
-| 401 | `UNAUTHENTICATED` | Missing, expired or revoked ID token |
-| 403 | `EMAIL_NOT_VERIFIED` | Firebase user without a verified email |
+| 401 | `UNAUTHENTICATED` | Missing, malformed, expired, forged or revoked ID token, or sign-in not configured. **One identical body for every cause** (the reason is only in the server log) |
+| 403 | `EMAIL_NOT_VERIFIED` | Valid token whose email is missing or not verified. Enforced on every authenticated endpoint, only after the token itself is proven |
 | 403 | `APP_CHECK_FAILED` | Missing or invalid App Check token |
 | 404 | `PACKAGE_NOT_FOUND` / `BOOKING_NOT_FOUND` | Unknown, inactive or not owned |
 | 409 | `TOO_MANY_PENDING_BOOKINGS` | 5 or more bookings already `PENDING_PAYMENT` |
@@ -294,6 +294,7 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | 429 | `RATE_LIMITED` | Throttled |
 | 500 | `INTERNAL` | Unexpected; includes `requestId` |
 | 503 | `PAYMENT_GATEWAY_UNAVAILABLE` | PayU unreachable at checkout |
+| 503 | `AUTH_UNAVAILABLE` | Google could not be reached to verify the token (or, at checkout, to check for revocation). Says nothing about the token: retry; do not sign the user out |
 
 ## 7. Rate limits (per instance + DB-backed where it matters)
 
