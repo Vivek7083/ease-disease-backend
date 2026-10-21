@@ -10,6 +10,7 @@ describe('envSchema', () => {
 
   /** What a deployed (staging / production) environment must also carry, so other tests can isolate their own variable. */
   const TICK = { TICK_AUDIENCE: 'https://api.easedisease.in', TICK_SERVICE_ACCOUNT_EMAIL: 'scheduler@easedisease-prod.iam.gserviceaccount.com' };
+  const FIREBASE = { FIREBASE_PROJECT_ID: 'easedisease-prod' };
 
   it('accepts a fully valid config and coerces PORT to a number', () => {
     const result = envSchema.parse(validEnv);
@@ -42,7 +43,7 @@ describe('envSchema', () => {
   });
 
   describe('FRONTEND_BASE_URL and TRUST_PROXY_HOPS', () => {
-    const prod = { ...validEnv, NODE_ENV: 'production', PAYU_KEY: 'k', PAYU_SALT: 's', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK };
+    const prod = { ...validEnv, NODE_ENV: 'production', PAYU_KEY: 'k', PAYU_SALT: 's', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK, ...FIREBASE };
 
     it('are optional in development and default TRUST_PROXY_HOPS to 0', () => {
       const result = envSchema.parse(validEnv);
@@ -90,7 +91,7 @@ describe('envSchema', () => {
   });
 
   describe('API_PUBLIC_URL', () => {
-    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in', ...TICK };
+    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in', ...TICK, ...FIREBASE };
 
     it('is optional in development', () => {
       expect(envSchema.parse(validEnv).API_PUBLIC_URL).toBeUndefined();
@@ -129,7 +130,7 @@ describe('envSchema', () => {
 
     it.each(['staging', 'production'])('requires PAYU_KEY and PAYU_SALT when NODE_ENV is %s', (nodeEnv) => {
       // A valid FRONTEND_BASE_URL is always present here, so only the PayU credentials can be the reason for a failure.
-      const deployed = { ...validEnv, NODE_ENV: nodeEnv, FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK };
+      const deployed = { ...validEnv, NODE_ENV: nodeEnv, FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK, ...FIREBASE };
       expect(() => envSchema.parse(deployed)).toThrow(/PAYU_KEY/);
       expect(() => envSchema.parse({ ...deployed, PAYU_KEY: 'k' })).toThrow(/PAYU_SALT/);
       expect(() => envSchema.parse({ ...deployed, PAYU_SALT: 's' })).toThrow(/PAYU_KEY/);
@@ -146,7 +147,7 @@ describe('envSchema', () => {
 
     it('only allows PAYU_ENV=live in production', () => {
       const creds = { PAYU_KEY: 'k', PAYU_SALT: 's', PAYU_ENV: 'live' };
-      const frontend = { FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK };
+      const frontend = { FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...TICK, ...FIREBASE };
       expect(() => envSchema.parse({ ...validEnv, ...creds })).toThrow(/PAYU_ENV=live/);
       expect(() => envSchema.parse({ ...validEnv, ...creds, ...frontend, NODE_ENV: 'staging' })).toThrow(/PAYU_ENV=live/);
       expect(envSchema.parse({ ...validEnv, ...creds, ...frontend, NODE_ENV: 'production' }).PAYU_ENV).toBe('live');
@@ -154,7 +155,7 @@ describe('envSchema', () => {
   });
 
   describe('tick (Cloud Scheduler OIDC) config', () => {
-    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in' };
+    const deployed = { ...validEnv, PAYU_KEY: 'k', PAYU_SALT: 's', FRONTEND_BASE_URL: 'https://easedisease.in', API_PUBLIC_URL: 'https://api.easedisease.in', ...FIREBASE };
 
     it('is optional in development and test', () => {
       for (const NODE_ENV of ['development', 'test']) {
@@ -189,6 +190,142 @@ describe('envSchema', () => {
       expect(() => envSchema.parse({ ...validEnv, ...TICK, TICK_SERVICE_ACCOUNT_EMAIL: 'not-an-email' })).toThrow();
       expect(() => envSchema.parse({ ...validEnv, ...TICK, TICK_AUDIENCE: 'not a url' })).toThrow();
       expect(() => envSchema.parse({ ...validEnv, ...TICK, TICK_AUDIENCE: '' })).toThrow();
+    });
+  });
+
+  describe('Firebase sign-in config', () => {
+    /** Everything else a deployed environment needs, so only the Firebase variable under test can be the reason for a failure. */
+    const deployed = {
+      ...validEnv,
+      PAYU_KEY: 'k',
+      PAYU_SALT: 's',
+      FRONTEND_BASE_URL: 'https://easedisease.in',
+      API_PUBLIC_URL: 'https://api.easedisease.in',
+      ...TICK,
+      ...FIREBASE,
+    };
+    const DEPLOYED_ENVS = ['staging', 'production'];
+    const LOCAL_ENVS = ['development', 'test'];
+
+    describe('FIREBASE_PROJECT_ID', () => {
+      it.each(LOCAL_ENVS)('is optional in %s', (nodeEnv) => {
+        expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv }).FIREBASE_PROJECT_ID).toBeUndefined();
+      });
+
+      it.each(DEPLOYED_ENVS)('is accepted in %s when valid', (nodeEnv) => {
+        expect(envSchema.parse({ ...deployed, NODE_ENV: nodeEnv }).FIREBASE_PROJECT_ID).toBe('easedisease-prod');
+      });
+
+      it.each(DEPLOYED_ENVS)('is required in %s, and the error names the variable', (nodeEnv) => {
+        const { FIREBASE_PROJECT_ID: _removed, ...withoutId } = deployed;
+        expect(() => envSchema.parse({ ...withoutId, NODE_ENV: nodeEnv })).toThrow(/FIREBASE_PROJECT_ID is required/);
+      });
+
+      it.each(DEPLOYED_ENVS)('a blank value counts as missing in %s', (nodeEnv) => {
+        expect(() => envSchema.parse({ ...deployed, NODE_ENV: nodeEnv, FIREBASE_PROJECT_ID: '' })).toThrow(/FIREBASE_PROJECT_ID is required/);
+        expect(() => envSchema.parse({ ...deployed, NODE_ENV: nodeEnv, FIREBASE_PROJECT_ID: '   ' })).toThrow(/FIREBASE_PROJECT_ID is required/);
+      });
+
+      it.each(LOCAL_ENVS)('a blank value (a copied "FIREBASE_PROJECT_ID=" line) counts as not set in %s', (nodeEnv) => {
+        expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, FIREBASE_PROJECT_ID: '' }).FIREBASE_PROJECT_ID).toBeUndefined();
+      });
+
+      it.each([
+        ['easedisease-staging'],
+        ['easedisease-prod'],
+        ['demo-local'],
+        ['abcdef'], // 6 characters, the shortest
+        ['a'.repeat(29) + 'b'], // 30 characters, the longest
+        ['project-123456'],
+        ['a1b2c3'],
+      ])('accepts %s', (id) => {
+        expect(envSchema.parse({ ...validEnv, FIREBASE_PROJECT_ID: id }).FIREBASE_PROJECT_ID).toBe(id);
+      });
+
+      it('trims surrounding whitespace', () => {
+        expect(envSchema.parse({ ...validEnv, FIREBASE_PROJECT_ID: '  easedisease-prod \n' }).FIREBASE_PROJECT_ID).toBe('easedisease-prod');
+      });
+
+      it.each([
+        ['upper-case letters', 'EaseDisease-Prod'],
+        ['an underscore', 'ease_disease'],
+        ['a space inside', 'ease disease'],
+        ['a leading digit', '1easedisease'],
+        ['a leading hyphen', '-easedisease'],
+        ['a trailing hyphen', 'easedisease-'],
+        ['5 characters (too short)', 'abcde'],
+        ['31 characters (too long)', 'a'.repeat(30) + 'b'],
+        ['a URL', 'https://easedisease-prod.firebaseapp.com'],
+        ['a path', 'projects/easedisease-prod'],
+        ['a dot', 'easedisease.prod'],
+        ['an embedded newline', 'easedisease\nprod'],
+      ])('rejects an id with %s, in every environment', (_label, id) => {
+        for (const nodeEnv of [...LOCAL_ENVS, ...DEPLOYED_ENVS]) {
+          expect(() => envSchema.parse({ ...deployed, NODE_ENV: nodeEnv, FIREBASE_PROJECT_ID: id })).toThrow(/FIREBASE_PROJECT_ID/);
+        }
+      });
+    });
+
+    describe('APP_CHECK_MODE', () => {
+      it.each([...LOCAL_ENVS, ...DEPLOYED_ENVS])('defaults to enforce in %s', (nodeEnv) => {
+        expect(envSchema.parse({ ...deployed, NODE_ENV: nodeEnv }).APP_CHECK_MODE).toBe('enforce');
+      });
+
+      it.each([...LOCAL_ENVS, ...DEPLOYED_ENVS])('accepts enforce in %s', (nodeEnv) => {
+        expect(envSchema.parse({ ...deployed, NODE_ENV: nodeEnv, APP_CHECK_MODE: 'enforce' }).APP_CHECK_MODE).toBe('enforce');
+      });
+
+      it.each(LOCAL_ENVS)('accepts off in %s', (nodeEnv) => {
+        expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, APP_CHECK_MODE: 'off' }).APP_CHECK_MODE).toBe('off');
+      });
+
+      it.each(DEPLOYED_ENVS)('refuses off in %s, and the error names the variable', (nodeEnv) => {
+        expect(() => envSchema.parse({ ...deployed, NODE_ENV: nodeEnv, APP_CHECK_MODE: 'off' })).toThrow(/APP_CHECK_MODE=off is not allowed/);
+      });
+
+      it.each(['OFF', 'Enforce', 'false', 'disabled', '0', 'on', '', ' '])('rejects the value %j (only enforce and off exist)', (value) => {
+        expect(() => envSchema.parse({ ...validEnv, APP_CHECK_MODE: value })).toThrow(/APP_CHECK_MODE/);
+      });
+    });
+
+    describe('FIREBASE_AUTH_EMULATOR_HOST', () => {
+      it.each(LOCAL_ENVS)('is optional in %s', (nodeEnv) => {
+        expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv }).FIREBASE_AUTH_EMULATOR_HOST).toBeUndefined();
+      });
+
+      it.each([['localhost:9099'], ['127.0.0.1:9099'], ['[::1]:9099'], ['emulator.internal:1'], ['localhost:65535']])('accepts %s in development and test', (host) => {
+        for (const nodeEnv of LOCAL_ENVS) {
+          expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, FIREBASE_AUTH_EMULATOR_HOST: host }).FIREBASE_AUTH_EMULATOR_HOST).toBe(host);
+        }
+      });
+
+      it.each(LOCAL_ENVS)('a blank value is tolerated in %s (the SDK treats it as unset)', (nodeEnv) => {
+        expect(envSchema.parse({ ...validEnv, NODE_ENV: nodeEnv, FIREBASE_AUTH_EMULATOR_HOST: '' }).FIREBASE_AUTH_EMULATOR_HOST).toBe('');
+      });
+
+      it.each([
+        ['a scheme', 'http://localhost:9099'],
+        ['no port', 'localhost'],
+        ['no host', ':9099'],
+        ['a non-numeric port', 'localhost:abc'],
+        ['port 0', 'localhost:0'],
+        ['a port above 65535', 'localhost:65536'],
+        ['a very large port', 'localhost:99999'],
+        ['a space', 'local host:9099'],
+        ['a path', 'localhost:9099/auth'],
+      ])('rejects %s in development', (_label, host) => {
+        expect(() => envSchema.parse({ ...validEnv, FIREBASE_AUTH_EMULATOR_HOST: host })).toThrow(/FIREBASE_AUTH_EMULATOR_HOST must be host:port/);
+      });
+
+      it.each(DEPLOYED_ENVS)('is refused in %s whenever it is present: valid, malformed or blank', (nodeEnv) => {
+        for (const host of ['localhost:9099', '10.0.0.5:9099', 'garbage', '']) {
+          expect(() => envSchema.parse({ ...deployed, NODE_ENV: nodeEnv, FIREBASE_AUTH_EMULATOR_HOST: host })).toThrow(/FIREBASE_AUTH_EMULATOR_HOST must not be set/);
+        }
+      });
+
+      it.each(DEPLOYED_ENVS)('is not a problem in %s when absent', (nodeEnv) => {
+        expect(envSchema.parse({ ...deployed, NODE_ENV: nodeEnv }).FIREBASE_AUTH_EMULATOR_HOST).toBeUndefined();
+      });
     });
   });
 });
