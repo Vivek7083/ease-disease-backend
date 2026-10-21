@@ -235,7 +235,7 @@ The "proper" version is **about 4–5 focused working days**, not one.
 | **S0: Setup** (½ day) | GitHub repo + protections; GCP/Firebase projects (staging, prod), billing + budgets; enable APIs; WIF; Artifact Registry; Cloud SQL; Secret Manager (PayU test/live); Hosting sites + DNS for all four hostnames; PayU dashboard: webhook URL | `main` merge deploys a hello-world API + web to staging automatically |
 | **S1: Foundations** (½ day) | Nest skeleton (config validation, error envelope, logging, health), Prisma + migrations, contracts package, CI tests, Angular env + interceptor | CI green; `/healthz` live on staging |
 | **S2: Login** (½ day) | Google sign-in, `/auth/sync`, profile, App Check | Sign in on staging; user row created |
-| **S3: Booking** (1 day) | Packages, assessment-form booking + count caps, My Bookings, booking page UI (see `docs/plans/2026-10-21-login-booking-build-plan.md`) | Create a booking; see it in My Bookings |
+| **S3: Booking** (1 day) | Packages, assessment-form booking + count caps, My Bookings, booking page UI (see `docs/plans/S2-S3-login-booking-revision/2026-10-21-login-booking-build-plan.md`) | Create a booking; see it in My Bookings |
 | **S4: Payments** (1–1½ days) | Checkout + hash, callback, webhook, verify_payment, reconcile tick, status page, retries | Test payment success/failure/closed-tab all end in the correct state |
 | **S5: Alerts + go-live** (½–1 day) | Outbox emails, security headers, alerts, backups check, PayU live switch, prod deploy | First live ₹1 test transaction refunded successfully |
 
