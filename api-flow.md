@@ -295,6 +295,7 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | 500 | `INTERNAL` | Unexpected; includes `requestId` |
 | 503 | `PAYMENT_GATEWAY_UNAVAILABLE` | PayU unreachable at checkout |
 | 503 | `AUTH_UNAVAILABLE` | Google could not be reached to verify the token (or, at checkout, to check for revocation). Says nothing about the token: retry; do not sign the user out |
+| 503 | `APP_CHECK_UNAVAILABLE` | Google could not be reached to verify the App Check token. Says nothing about the token: retry with the same token |
 
 ## 7. Rate limits (per instance + DB-backed where it matters)
 
