@@ -6,7 +6,7 @@ This supersedes v2 and `claude/day1-mvp-plan.md`.
 **v1 features:**
 - Google sign-in
 - Single package
-- Slot booking
+- Booking via an assessment form (no slots; experts contact the patient after payment)
 - **PayU hosted checkout with full payment tracking**
 - Booking alert emails
 - My Bookings
@@ -32,7 +32,7 @@ api.easedisease.in ─► Firebase Hosting (2nd site, rewrite ** → Cloud Run)
                  ├─ PayU (test.payu.in / secure.payu.in, verify_payment API)
                  └─ Transactional email API (booking alerts)
 Cloud Scheduler ─► POST /v1/internal/tick every 5 min (OIDC-auth'd service account)
-                   reconcile payments · expire slot holds · retry failed emails
+                   reconcile payments · retry failed emails
 ```
 
 **Decisions and reasons**
@@ -100,10 +100,8 @@ Conventions: UUID PKs · `timestamptz` (UTC, shown in IST) · money in **paise**
 |---|---|
 | **users** | id, **firebase_uid (unique)**, name, email, phone (E.164), dob?, auth_provider, last_login_at |
 | **packages** | id, slug, title, description, price_paise, currency, duration_minutes, **is_active**, sort_order |
-| **availability_rules** | weekday, start_time, end_time, slot_minutes, **capacity** (= number of nutritionists free, default 2) |
-| **blocked_dates** | date, reason |
-| **bookings** | id, reference (`ED-7K3QXM`, unique), user_id, package_id, slot_start, slot_end, status, **amount_paise (snapshot)**, patient_name, patient_dob?, notes, consent_at, hold_expires_at |
-| **transactions** | id, **order_id (= PayU txnid, unique)**, booking_id, user_id, gateway, amount_paise, currency, status, payment_mode, **pg_txn_id (mihpayid)**, bank_ref_num, error_code, error_message, completed_at |
+| **bookings** | id, reference (`ED-7K3QXM`, unique), user_id, package_id, status, **amount_paise (snapshot)**, patient_name (the form's `name`), whatsapp_number, email, age, city, gender? (free text), notes?, consent_at, created_ip?, created_user_agent?. `patient_dob` and `hold_expires_at` exist but are unused |
+| **transactions** | id, **order_id (= PayU txnid, unique)**, booking_id (unique: one transaction per booking), user_id, gateway, amount_paise, currency, status, payment_mode, **pg_txn_id (mihpayid)**, bank_ref_num, error_code, error_message, completed_at, created_ip?, created_user_agent? |
 | **payment_events** | id, transaction_id, source (`RETURN` \| `WEBHOOK` \| `RECONCILE`), hash_valid, payload jsonb (raw), received_at. **Append-only** |
 | **notification_recipients** | email, kind (`EXPERT` \| `SHARED_INBOX` \| `ADMIN`), is_active |
 | **outbox** | type, payload jsonb, status, attempts, next_attempt_at, last_error |
@@ -111,14 +109,13 @@ Conventions: UUID PKs · `timestamptz` (UTC, shown in IST) · money in **paise**
 | **idempotency_keys** | key, user_id, endpoint, request_hash, response jsonb, created_at (purged after 24 h) |
 
 **Statuses**
-- Booking: `PENDING_PAYMENT` → `CONFIRMED` → `COMPLETED` / `CANCELLED` / `NO_SHOW`, or `EXPIRED` (hold lapsed), or `NEEDS_ATTENTION` (paid but slot lost).
-- Transaction: `CREATED` → `INITIATED` → `SUCCESS` / `FAILURE` / `PENDING` / `CANCELLED` / `EXPIRED`.
+- Booking: `PENDING_PAYMENT` → `CONFIRMED` → `COMPLETED` / `CANCELLED` / `NO_SHOW`, or `FAILED` (payment failed/cancelled at PayU), or `NEEDS_ATTENTION` (amount mismatch, or paid on a closed booking). `EXPIRED` is defined but never set from our side.
+- Transaction: `CREATED` → `INITIATED` → `SUCCESS` / `FAILURE` / `PENDING` / `CANCELLED` (`EXPIRED` defined, unused).
 
-**Overbooking guard:** inside one DB transaction:
-1. `pg_advisory_xact_lock(hash(slot_start))`.
-2. Count active bookings for the slot (`CONFIRMED`, plus `PENDING_PAYMENT` with an unexpired hold).
-3. Insert only if the count is below capacity.
-This is race-free across instances.
+**Booking caps** (per `user_id`, independent of each other), checked inside the insert's DB transaction:
+1. Fewer than 5 bookings in `PENDING_PAYMENT` (no time window).
+2. Fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day).
+There is no slot capacity and no overbooking guard (no slots). The caps need their own concurrency guard because no unique index enforces them.
 
 ---
 
@@ -133,26 +130,24 @@ This is race-free across instances.
 
 ### 4.2 Booking + payment
 1. `GET /v1/packages` → active package.
-2. `GET /v1/slots?from&to` → free slots (capacity minus active bookings).
-3. Form: patient name, DOB?, notes?, consent → `POST /v1/bookings` → `PENDING_PAYMENT` with a 15-min hold; price snapshotted from the DB.
-4. `POST /v1/bookings/{ref}/checkout` → new transaction (`CREATED` → `INITIATED`) → returns the PayU action URL and fields.
+2. Assessment form: name, WhatsApp, email, age, city, gender?, notes?, consent → `POST /v1/bookings` (signed-in user) → `PENDING_PAYMENT`; price snapshotted from the DB. No slot, no hold.
+3. `POST /v1/bookings/{ref}/checkout` → new transaction (`CREATED` → `INITIATED`) → returns the PayU action URL and fields.
    - Hash: `sha512(key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||SALT)`, with `udf1` = booking ref.
    - Angular auto-submits the form to PayU.
-5. PayU → browser POST to `https://api.easedisease.in/v1/payments/payu/callback` (surl and furl).
-6. **One idempotent handler** for callback, webhook and reconciliation:
+4. PayU → browser POST to `https://api.easedisease.in/v1/payments/payu/callback` (surl and furl).
+5. **One idempotent handler** for callback, webhook and reconciliation:
    1. Save the raw payload to `payment_events`.
    2. Verify the reverse hash.
    3. **Confirm with PayU `verify_payment`** (server-to-server).
    4. Check the amount and txnid.
    5. In one DB transaction: transaction status + booking `CONFIRMED` + outbox email rows.
    Guarded transitions make duplicates no-ops.
-7. 303 → `https://easedisease.in/booking/{ref}`. The page polls `GET /v1/bookings/{ref}` until the status is final.
-8. **Safety nets:**
+6. 303 → `https://easedisease.in/booking/{ref}`. The page polls `GET /v1/bookings/{ref}` until the status is final.
+7. **Safety nets:**
    - PayU webhook (set in the PayU dashboard) for users who close the tab.
-   - The tick reconciles `INITIATED`/`PENDING` older than 20 min.
-   - The tick expires unpaid holds.
-9. **Failed payment:** retry while the hold is valid (new order_id, same booking).
-10. **Paid after the hold lapsed and the slot was taken:** booking → `NEEDS_ATTENTION` + admin alert → manual refund.
+   - The tick reconciles `INITIATED`/`PENDING` transactions 20 min to 24 h old. Nothing is expired from our side.
+8. **Failed payment:** booking → `FAILED`. Not retried on the same booking in v1 (one transaction per booking); the user creates a new booking. A late success still confirms it.
+9. **Paid on a closed booking, or amount mismatch:** booking → `NEEDS_ATTENTION` + admin alert → manual decision/refund.
 
 **Credential use:** hosted checkout and `verify_payment` need **key + salt**. Client ID/secret (PayU's OAuth APIs) aren't needed for v1. Store them now for refunds and settlement APIs later.
 
@@ -172,15 +167,14 @@ POST  /v1/auth/sync                 → { user, profileComplete }
 GET   /v1/me                        → { user }
 PATCH /v1/me                        { name?, phone, dob? }
 GET   /v1/packages                  → Package[]
-GET   /v1/slots?from&to             → { slots: [{ start, end, available }] }
-POST  /v1/bookings                  { packageId, slotStart, patientName, patientDob?, notes?, consent: true }
-GET   /v1/bookings                  → BookingSummary[] (mine)
+POST  /v1/bookings                  { packageId, name, whatsappNumber, email, age, city, gender?, notes?, consent: true }
+GET   /v1/bookings?status=active|past|all → BookingSummary[] (mine)
 GET   /v1/bookings/{ref}            → BookingDetail (mine)
 POST  /v1/bookings/{ref}/checkout   → { action, fields }
 POST  /v1/payments/payu/callback    (form-urlencoded from PayU; 303 redirect)
 POST  /v1/payments/payu/webhook     (from PayU)
 POST  /v1/internal/tick             (Cloud Scheduler OIDC only)
-Error envelope: { "error": { "code": "SLOT_FULL", "message": "...", "details": {} } }
+Error envelope: { "error": { "code": "DAILY_BOOKING_LIMIT", "message": "...", "details": {} } }
 ```
 
 Types live in `packages/contracts` and are imported by both Angular and Nest.
@@ -192,9 +186,9 @@ Types live in `packages/contracts` and are imported by both Angular and Nest.
 | Area | Control |
 |---|---|
 | AuthN | Firebase ID token verified on every request (`firebase-admin`), revocation check on checkout |
-| Bot/abuse | **App Check (reCAPTCHA Enterprise)** token required on booking and checkout endpoints; per-IP + per-user rate limits (Nest throttler); max 3 unpaid upcoming bookings per user |
+| Bot/abuse | **App Check (reCAPTCHA Enterprise)** token required on booking and checkout endpoints; per-IP + per-user rate limits (Nest throttler); max 5 unpaid and max 5 confirmed-per-day (IST) bookings per user |
 | AuthZ | Every query scoped by `user_id`; booking refs are not authorization (ownership checked) |
-| Input | DTO validation (whitelist, forbid unknown); price always from DB; slot bounds checked server-side |
+| Input | DTO validation (whitelist, forbid unknown); price always from DB; form fields bounds-checked server-side |
 | Payments | Reverse-hash verify + `verify_payment` + amount match; idempotent transitions; raw event ledger; callback/webhook exempt from auth but authenticated by hash |
 | Secrets | Secret Manager only; runtime SA has `secretAccessor` on exactly these secrets; no SA keys anywhere (WIF) |
 | Network | HTTPS/HSTS; CORS allowlist (`https://easedisease.in`); Helmet; CSP + frame-ancestors via `firebase.json` |
@@ -210,7 +204,7 @@ Types live in `packages/contracts` and are imported by both Angular and Nest.
 docker compose up -d                       # Postgres 16
 firebase emulators:start --only auth       # fake Google sign-in
 cd apps/api && cp .env.example .env.local  # PayU TEST key/salt, DB URL (git-ignored)
-npm run prisma:migrate && npm run seed     # schema + one package + availability
+npm run prisma:migrate && npm run seed     # schema + one package
 npm run start:dev                          # API on :3000
 cd apps/web && ng serve                    # :4200, proxy /v1 → :3000
 ```
@@ -241,10 +235,10 @@ The "proper" version is **about 4–5 focused working days**, not one.
 | **S0: Setup** (½ day) | GitHub repo + protections; GCP/Firebase projects (staging, prod), billing + budgets; enable APIs; WIF; Artifact Registry; Cloud SQL; Secret Manager (PayU test/live); Hosting sites + DNS for all four hostnames; PayU dashboard: webhook URL | `main` merge deploys a hello-world API + web to staging automatically |
 | **S1: Foundations** (½ day) | Nest skeleton (config validation, error envelope, logging, health), Prisma + migrations, contracts package, CI tests, Angular env + interceptor | CI green; `/healthz` live on staging |
 | **S2: Login** (½ day) | Google sign-in, `/auth/sync`, profile, App Check | Sign in on staging; user row created |
-| **S3: Booking** (1 day) | Packages, availability → slots, booking + hold + overbooking guard, My Bookings, booking page UI | Book a slot; see it in My Bookings |
+| **S3: Booking** (1 day) | Packages, assessment-form booking + count caps, My Bookings, booking page UI (see `docs/plans/2026-10-21-login-booking-build-plan.md`) | Create a booking; see it in My Bookings |
 | **S4: Payments** (1–1½ days) | Checkout + hash, callback, webhook, verify_payment, reconcile tick, status page, retries | Test payment success/failure/closed-tab all end in the correct state |
 | **S5: Alerts + go-live** (½–1 day) | Outbox emails, security headers, alerts, backups check, PayU live switch, prod deploy | First live ₹1 test transaction refunded successfully |
 
 ## 10. Open decisions
 1. Email provider for alerts (any transactional API; e.g. Resend, Brevo or Amazon SES). The recipient list is configurable either way.
-2. Confirm availability: weekly hours + capacity 2 (either nutritionist free), with no expert choice by the patient.
+2. ~~Confirm availability: weekly hours + capacity 2~~ Resolved 2026-10-17: no slots; experts contact the patient after payment.

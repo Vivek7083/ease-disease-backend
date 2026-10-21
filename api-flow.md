@@ -1,4 +1,4 @@
-# Ease Disease: Backend API Flow (v1, locked)
+# Ease Disease: Backend API Flow (v1, locked; revised 2026-10-21: no slots, assessment-form bookings, count caps)
 
 Companion to `claude/backend-plan.md` (v3). Base URL `https://api.easedisease.in` (staging: `https://api-staging.easedisease.in`).
 
@@ -18,6 +18,7 @@ Companion to `claude/backend-plan.md` (v3). Base URL `https://api.easedisease.in
 - **Phone OTP:** costs per SMS. It can be added later.
 
 **Account linking:** keep Firebase's default **"one account per email address"**. A user who signs in with Google on Monday and by email link on Friday with the same email lands on the **same Firebase user (same uid)**, so their bookings stay together. QA must check this, including the "account exists with different credential" prompt.
+This linking happens entirely inside Firebase (a console setting); our backend never merges users by email, only by `firebase_uid`.
 
 **Email-link UX rules:**
 - Store the typed email in `localStorage` before sending the link.
@@ -71,15 +72,14 @@ sequenceDiagram
   participant DB as Postgres
   participant P as PayU
 
+  Note over U,W: Not signed in? → Login flow (§1) first; every call below that is marked 🔐 requires a Bearer token
   W->>A: GET /v1/packages
-  W->>A: GET /v1/slots?packageId&from&to
-  U->>W: Pick slot, fill patient name / DOB / notes, tick consent
-  Note over W: Not signed in? → Login flow (§1), then return here
+  U->>W: Pick a package, fill the assessment form (name, WhatsApp, email, age, city, gender?, notes?, consent)
   W->>A: POST /v1/bookings (Idempotency-Key)
-  A->>DB: tx: advisory lock(slot) → capacity check → insert booking PENDING_PAYMENT (hold 15 min, price snapshot)
-  A-->>W: 201 { booking, holdExpiresAt }
+  A->>DB: tx: caps check (< 5 PENDING_PAYMENT open, < 5 CONFIRMED today IST) → insert booking PENDING_PAYMENT (price snapshot, IP/UA)
+  A-->>W: 201 { booking, canPay: true }
   W->>A: POST /v1/bookings/{ref}/checkout (Idempotency-Key)
-  A->>DB: insert transaction CREATED→INITIATED (order_id = txnid)
+  A->>DB: insert/reuse transaction CREATED→INITIATED (order_id = txnid, IP/UA)
   A-->>W: { gatewayUrl, fields incl. hash }
   W->>P: Auto-submit form (browser leaves site)
   U->>P: Pays (UPI / card / netbanking)
@@ -89,7 +89,8 @@ sequenceDiagram
   A-->>U: 303 → easedisease.in/booking/{ref}
   W->>A: GET /v1/bookings/{ref} (poll until final)
   P-->>A: Webhook POST /v1/payments/payu/webhook (same handler, idempotent)
-  Note over A: Cloud Scheduler tick every 5 min: reconcile INITIATED/PENDING >20 min, expire holds, retry emails
+  Note over A: Cloud Scheduler tick every 5 min: reconcile INITIATED/PENDING transactions 20 min–24 h old, retry emails
+  Note over A: Nothing is ever marked EXPIRED from our side. A user may hold several bookings in flight at once.
 ```
 
 ---
@@ -106,7 +107,7 @@ sequenceDiagram
 | Idempotency | `Idempotency-Key: <uuid v4>` required on `POST /v1/bookings` and `/checkout`. The same key from the same user within 24 h returns the original response; the same key with a different body returns `409 IDEMPOTENCY_CONFLICT` |
 | Tracing | Every response carries `X-Request-Id`, which is also in logs and error bodies |
 | Pagination | Cursor based: `?limit=20&cursor=<opaque>` → `{ items, nextCursor }` |
-| Errors | `{ "error": { "code": "SLOT_FULL", "message": "Human readable", "details": {}, "requestId": "..." } }`. **The UI branches on `code`.** |
+| Errors | `{ "error": { "code": "DAILY_BOOKING_LIMIT", "message": "Human readable", "details": {}, "requestId": "..." } }`. **The UI branches on `code`.** |
 | Ownership | A booking not owned by the caller returns **404** (never 403), so references can't be probed |
 | Shared types | All DTOs live in `packages/contracts` and are imported by Angular and Nest |
 
@@ -125,7 +126,7 @@ sequenceDiagram
 - Server:
   1. Verify the ID token.
   2. Require `email_verified = true`.
-  3. Upsert the user by `firebase_uid`: email, display name (if empty), `auth_provider` (`google.com` | `emailLink`), `last_login_at`.
+  3. Upsert the user by `firebase_uid`: email, display name (if empty), `auth_provider` (`google.com` | `emailLink`), `last_login_at`. `name` is only written from the token when the stored value is empty (an edited name is never overwritten). `email` is lower-cased on write.
 - `200`:
 ```json
 { "user": { "id": "7b1e…", "email": "priya@example.com", "name": "Priya Sharma", "phone": null, "dob": null, "authProvider": "google.com" },
@@ -143,7 +144,7 @@ sequenceDiagram
   - name: 2–100 chars.
   - phone: normalised to E.164; Indian mobile; used as the WhatsApp contact. **Not verified in v1.**
   - dob: past date, age ≤ 120.
-- `200 { user, profileComplete }`. **`profileComplete` = name + phone present.**
+- `200 { user, profileComplete }`. **`profileComplete` = name + phone present.** It is informational only; it no longer gates booking creation.
 
 ### Catalog
 
@@ -153,58 +154,59 @@ sequenceDiagram
                   "pricePaise": 150000, "currency": "INR", "durationMinutes": 30 } ] }
 ```
 
-**`GET /v1/slots?packageId=…&from=2026-10-20&to=2026-10-26`** 🌐
-- Range ≤ 14 days; past slots excluded; slots start at least 2 hours from now.
-- Each slot is generated from the availability rules minus blocked dates minus active bookings (`CONFIRMED` + unexpired `PENDING_PAYMENT`).
-```json
-{ "timezone": "Asia/Kolkata",
-  "slots": [ { "start": "2026-10-20T04:30:00.000Z", "end": "2026-10-20T05:00:00.000Z", "available": true } ] }
-```
-- Errors: `400 VALIDATION_FAILED`, `404 PACKAGE_NOT_FOUND`.
+There is no slot endpoint: booking is package + assessment details, and the experts contact the patient after payment (`GET /v1/slots` was removed 2026-10-21).
 
 ### Bookings
 
 **`POST /v1/bookings`** 🔐🛡️🔁
 ```json
-{ "packageId": "pkg_…", "slotStart": "2026-10-20T04:30:00.000Z",
-  "patientName": "Priya Sharma", "patientDob": "1990-04-12", "notes": "Bloating after meals", "consent": true }
+{ "packageId": "pkg_…",
+  "name": "Priya Sharma", "whatsappNumber": "+91 98765 43210", "email": "priya@example.com",
+  "age": 34, "city": "Bengaluru", "gender": "Female",
+  "notes": "Bloating after meals", "consent": true }
 ```
+- `gender` and `notes` are optional. `gender` is free text (trimmed, max 50 chars, empty becomes null). Every other field above is required.
+- These fields describe **this booking**, not the signed-in account: `name`, `whatsappNumber` and `email` may differ from `users.name`/`phone`/`email` (for example booking for someone else). Nothing is written back to `users`.
 - Server checks, in order:
-  1. `profileComplete`.
-  2. Package exists and is active.
-  3. `slotStart` is on a slot boundary, inside the rules, and not blocked.
-  4. Caller has < 3 upcoming `PENDING_PAYMENT` bookings.
-  5. DB transaction: `pg_advisory_xact_lock(slot)` → count active bookings < capacity → insert booking.
-- The booking is created with `amount_paise` from the package, `hold_expires_at = now + 15 min` and `consent_at = now`.
+  1. Package exists and is active.
+  2. Field validation: `whatsappNumber` uses the same Indian-mobile rule as checkout (stored `+91XXXXXXXXXX`); `email` is lower-cased; `age` 1–119 (integer); `city` 2–100 chars; `consent` must be `true`.
+  3. Caller has fewer than 5 bookings currently `PENDING_PAYMENT` (any age, no time window).
+  4. Caller has fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day).
+  5. Insert the booking inside one DB transaction: `amount_paise` from the package, `consent_at = now`, request IP and user-agent stored.
+- The two caps are independent of each other and both are counted per `userId` (the Firebase account, never the email string).
+- `profileComplete` is not required to create a booking.
 - `201`:
 ```json
 { "booking": { "reference": "ED-7K3QXM", "status": "PENDING_PAYMENT", "packageTitle": "One-Time Consult",
-               "slotStart": "…", "slotEnd": "…", "amountPaise": 150000, "currency": "INR",
-               "patientName": "Priya Sharma", "holdExpiresAt": "…", "payment": null, "canPay": true } }
+               "amountPaise": 150000, "currency": "INR",
+               "name": "Priya Sharma", "whatsappNumber": "+919876543210", "email": "priya@example.com",
+               "age": 34, "city": "Bengaluru", "gender": "Female",
+               "canPay": true, "payment": null } }
 ```
 - Errors:
-  - `409 PROFILE_INCOMPLETE`
   - `404 PACKAGE_NOT_FOUND`
   - `400 VALIDATION_FAILED` (`details.fields`)
-  - `409 SLOT_FULL`
-  - `429 TOO_MANY_PENDING_BOOKINGS`
+  - `409 TOO_MANY_PENDING_BOOKINGS`: 5 or more bookings already `PENDING_PAYMENT`.
+  - `409 DAILY_BOOKING_LIMIT`: 5 bookings already `CONFIRMED` today (IST).
   - `409 IDEMPOTENCY_CONFLICT`
 
-**`GET /v1/bookings?status=upcoming|past|all&limit=20&cursor=…`** 🔐. **This is My Bookings.**
+**`GET /v1/bookings?status=active|past|all&limit=20&cursor=…`** 🔐. **This is My Bookings.**
+- `active` = `PENDING_PAYMENT`, `CONFIRMED`, `NEEDS_ATTENTION`. `past` = every other status.
 ```json
 { "items": [ { "reference": "ED-7K3QXM", "status": "CONFIRMED", "packageTitle": "One-Time Consult",
-               "slotStart": "…", "slotEnd": "…", "amountPaise": 150000, "paymentStatus": "SUCCESS" } ],
+               "amountPaise": 150000, "paymentStatus": "SUCCESS" } ],
   "nextCursor": null }
 ```
 
 **`GET /v1/bookings/{ref}`** 🔐. Detail; also polled by the payment status page (every 2 s, max 60 s).
 ```json
-{ "booking": { "reference": "ED-7K3QXM", "status": "CONFIRMED", "packageTitle": "…", "slotStart": "…", "slotEnd": "…",
-               "amountPaise": 150000, "currency": "INR", "patientName": "…", "patientDob": "…", "notes": "…",
-               "holdExpiresAt": null, "canPay": false,
+{ "booking": { "reference": "ED-7K3QXM", "status": "CONFIRMED", "packageTitle": "…",
+               "amountPaise": 150000, "currency": "INR",
+               "name": "…", "whatsappNumber": "+91…", "email": "…", "age": 34, "city": "…", "gender": "…", "notes": "…",
+               "canPay": false,
                "payment": { "orderId": "EDTX01JB…", "status": "SUCCESS", "mode": "UPI", "paidAt": "…" } } }
 ```
-- `canPay` = status `PENDING_PAYMENT` and hold still valid.
+- `canPay` = status is `PENDING_PAYMENT`.
 - Errors: `404 BOOKING_NOT_FOUND` (also when not the owner).
 
 ### Payments
@@ -212,8 +214,8 @@ sequenceDiagram
 **`POST /v1/bookings/{ref}/checkout`** 🔐🛡️🔁
 - Preconditions:
   - Booking is owned by the caller and `PENDING_PAYMENT`.
-  - Hold is still valid. If it has expired and the slot is still free, the hold is re-taken (new 15 min); otherwise `409 SLOT_NO_LONGER_AVAILABLE` and the booking is marked `EXPIRED`.
-  - An `INITIATED` transaction younger than 15 min is **reused** (same fields), so double-clicks don't create double payments.
+  - An existing `CREATED`/`INITIATED` transaction is **reused regardless of age** (same fields), so double-clicks don't create double payments. There is one transaction per booking.
+  - The request IP and user-agent are stored on the transaction when it is created (chargeback evidence).
 - Creates the transaction: `order_id` = `EDTX` + ULID (≤ 25 chars, PayU txnid limit), status `INITIATED`, amount from the booking snapshot.
 - Hash: `sha512(key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||SALT)`, with amount as `"1500.00"` and `udf1` = booking ref.
 - `200`:
@@ -226,7 +228,7 @@ sequenceDiagram
               "udf1": "ED-7K3QXM", "hash": "…" } }
 ```
 - The merchant `key` is public by design. **The salt never leaves the server.** Staging returns `https://test.payu.in/_payment`.
-- Errors: `404 BOOKING_NOT_FOUND`, `409 BOOKING_NOT_PAYABLE`, `409 SLOT_NO_LONGER_AVAILABLE`.
+- Errors: `404 BOOKING_NOT_FOUND`, `409 BOOKING_NOT_PAYABLE`.
 
 **`POST /v1/payments/payu/callback`** 🌐. `application/x-www-form-urlencoded` from PayU via the user's browser (surl/furl).
 - **Authenticated by hash, not by token** (it is a cross-site form POST).
@@ -243,19 +245,21 @@ sequenceDiagram
 5. Check the amount equals `amount_paise` and the txnid matches. Mismatch → transaction `FAILURE` + booking `NEEDS_ATTENTION` + admin alert.
 6. One DB transaction with guarded transitions (`UPDATE … WHERE status IN (…)`):
    - `success` → transaction `SUCCESS` (mode, mihpayid, bank_ref, completed_at).
-     - Slot still held or free → booking `CONFIRMED` + outbox: expert alert + patient confirmation.
-     - Slot lost (hold expired and filled) → booking `NEEDS_ATTENTION` + admin alert (refund).
-   - `failure` / `cancelled` → transaction `FAILURE` / `CANCELLED`; booking stays `PENDING_PAYMENT` (retry allowed while the hold lasts).
-   - `pending` → transaction `PENDING`; the tick re-checks.
+     - Booking is `PENDING_PAYMENT`, `FAILED` or `EXPIRED` → booking `CONFIRMED` + outbox: expert alert + patient confirmation. (A late success after a recorded failure still confirms: PayU's truth is final.)
+     - Booking already `CONFIRMED`, `COMPLETED` or `NEEDS_ATTENTION` → nothing more to do.
+     - Booking closed in any other way (for example `CANCELLED`) → booking `NEEDS_ATTENTION` + admin alert (a human decides, likely a refund).
+   - `failure` / `cancelled` → transaction `FAILURE` / `CANCELLED`; booking `PENDING_PAYMENT` → `FAILED`. A failed booking is not retried on the same booking in v1; the user creates a new one. A settled (`SUCCESS`) transaction is never touched.
+   - `pending` → transaction `PENDING`; the booking does not change; the tick re-checks.
 7. A replay or a late duplicate changes nothing; the guarded UPDATE affects 0 rows.
 
 ### Internal
 
 **`POST /v1/internal/tick`**. Cloud Scheduler every 5 min. Only accepted with a Google-signed OIDC token for the scheduler's service account (audience = API URL).
-1. **Reconcile:** transactions `INITIATED` or `PENDING` older than 20 min → `verify_payment` → payment handler. Give up after 24 h → `EXPIRED`.
-2. **Expire holds:** `PENDING_PAYMENT` bookings past `hold_expires_at` with no open transaction → `EXPIRED`.
-3. **Outbox:** send due emails, with exponential backoff, max 8 attempts, then alert.
-4. **Cleanup:** idempotency keys older than 24 h.
+1. **Reconcile:** transactions `INITIATED` or `PENDING` between 20 min and 24 h old → `verify_payment` → payment handler. Nothing is marked `EXPIRED` from our side.
+2. **Outbox:** send due emails, with exponential backoff, max 8 attempts, then alert.
+3. **Cleanup:** idempotency keys older than 24 h.
+
+(The former "expire holds" step was removed: there is no hold.)
 
 ---
 
@@ -263,14 +267,15 @@ sequenceDiagram
 
 ```
 Booking:      PENDING_PAYMENT ──pay ok──► CONFIRMED ──► COMPLETED | NO_SHOW | CANCELLED (staff, later)
-                    │ hold lapsed, no open payment ──► EXPIRED
-                    └ paid but slot lost / amount mismatch ──► NEEDS_ATTENTION ──(staff)──► CONFIRMED | REFUNDED
+                    │ payment failed/cancelled at PayU ──► FAILED   (a late success still ──► CONFIRMED)
+                    └ paid but amount mismatch / paid on a closed booking ──► NEEDS_ATTENTION ──(staff)──► CONFIRMED | REFUNDED
 
 Transaction:  CREATED ──► INITIATED ──► SUCCESS
                                ├──────► FAILURE | CANCELLED
-                               ├──────► PENDING ──(reconcile)──► SUCCESS | FAILURE
-                               └──────► EXPIRED (no result after 24 h)
+                               └──────► PENDING ──(reconcile)──► SUCCESS | FAILURE
 ```
+
+`EXPIRED` stays defined in both enums but is never set from our side.
 
 ## 6. Error codes
 
@@ -281,12 +286,11 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | 403 | `EMAIL_NOT_VERIFIED` | Firebase user without a verified email |
 | 403 | `APP_CHECK_FAILED` | Missing or invalid App Check token |
 | 404 | `PACKAGE_NOT_FOUND` / `BOOKING_NOT_FOUND` | Unknown, inactive or not owned |
-| 409 | `PROFILE_INCOMPLETE` | Phone or name missing before booking |
-| 409 | `SLOT_FULL` | Capacity reached |
-| 409 | `SLOT_NO_LONGER_AVAILABLE` | Hold lapsed and slot taken before checkout |
+| 409 | `TOO_MANY_PENDING_BOOKINGS` | 5 or more bookings already `PENDING_PAYMENT` |
+| 409 | `DAILY_BOOKING_LIMIT` | 5 bookings already `CONFIRMED` today (IST) |
 | 409 | `BOOKING_NOT_PAYABLE` | Not `PENDING_PAYMENT` |
 | 409 | `IDEMPOTENCY_CONFLICT` | Same key, different body |
-| 429 | `RATE_LIMITED` / `TOO_MANY_PENDING_BOOKINGS` | Throttled, or 3 unpaid bookings already |
+| 429 | `RATE_LIMITED` | Throttled |
 | 500 | `INTERNAL` | Unexpected; includes `requestId` |
 | 503 | `PAYMENT_GATEWAY_UNAVAILABLE` | PayU unreachable at checkout |
 
@@ -294,9 +298,9 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 
 | Endpoint group | Limit |
 |---|---|
-| Public GETs (`/packages`, `/slots`) | 60 / min / IP |
+| Public GETs (`/packages`) | 60 / min / IP |
 | `/auth/sync`, `/me` | 30 / min / user |
-| `POST /bookings` | 10 / hour / user (+ max 3 unpaid) |
+| `POST /bookings` | 10 / hour / user (a request-rate guard, separate from the count caps) |
 | `/checkout` | 10 / hour / user |
 | PayU callback / webhook | 120 / min / IP (hash-authenticated) |
 
@@ -305,7 +309,7 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | Endpoint | Reads | Writes |
 |---|---|---|
 | auth/sync, me | users | users |
-| packages, slots | packages, availability_rules, blocked_dates, bookings | none |
-| POST bookings | users, packages, availability_rules, bookings, idempotency_keys | bookings, idempotency_keys |
-| checkout | bookings, transactions | transactions, bookings (hold), idempotency_keys |
+| packages | packages | none |
+| POST bookings | users, packages, bookings, idempotency_keys | bookings, idempotency_keys |
+| checkout | bookings, transactions | transactions, idempotency_keys |
 | callback / webhook / tick | transactions, bookings | payment_events, transactions, bookings, outbox |
