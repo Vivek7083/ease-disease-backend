@@ -160,7 +160,7 @@ There is no slot endpoint: booking is package + assessment details, and the expe
 
 **`POST /v1/bookings`** 🔐🛡️🔁
 ```json
-{ "packageId": "pkg_…",
+{ "packageId": "00000000-0000-4000-8000-000000000001",
   "name": "Priya Sharma", "whatsappNumber": "+91 98765 43210", "email": "priya@example.com",
   "age": 34, "city": "Bengaluru", "gender": "Female",
   "notes": "Bloating after meals", "consent": true }
@@ -168,12 +168,14 @@ There is no slot endpoint: booking is package + assessment details, and the expe
 - `gender` and `notes` are optional. `gender` is free text (trimmed, max 50 chars, empty becomes null). Every other field above is required.
 - Stored in the `bookings.consultee_*` columns (`consultee_name`, `consultee_whatsapp_number`, `consultee_email`, `consultee_age`, `consultee_city`, `consultee_gender`); "consultee" is the person the consultation is for. The JSON field names stay `name`, `whatsappNumber`, etc.
 - These fields describe **this booking**, not the signed-in account: `name`, `whatsappNumber` and `email` may differ from `users.name`/`phone`/`email` (for example booking for someone else). Nothing is written back to `users`.
-- Server checks, in order:
-  1. Package exists and is active.
-  2. Field validation (trimmed first): `name` 2–100 chars; `whatsappNumber` entered with its country code, any country, stored as E.164 (`+` then 8–15 digits, no spaces); `email` lower-cased, at most 50 characters and in the form PayU accepts (it is sent to PayU and is part of the payment hash); `age` 1–119 (integer); `city` 2–100 chars; `gender` optional free text, 1–50 chars; `consent` must be `true`. The database enforces the limits on every field above except `name` and `consent` as a backstop.
-  3. Caller has fewer than 5 bookings currently `PENDING_PAYMENT` (any age, no time window).
-  4. Caller has fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day).
-  5. Insert the booking inside one DB transaction: `amount_paise` from the package, `consent_at = now`, request IP and user-agent stored.
+- Server checks, in order (this order is deliberate: a repeat of an earlier request must still be answered after its package was switched off, so the package is checked after the key):
+  1. `Idempotency-Key` header present and a uuid v4 (`400 VALIDATION_FAILED`, `details.fields["Idempotency-Key"]`).
+  2. Field validation (trimmed first, all problems reported together in `details.fields`; unknown fields are refused; control characters, including NUL, are refused): `packageId` a uuid; `name` 2–100 chars; `whatsappNumber` entered with its country code, any country, stored as E.164 (`+` then 8–15 digits, no spaces); `email` lower-cased, at most 50 characters and in the form PayU accepts (it is sent to PayU and is part of the payment hash); `age` 1–119 (integer); `city` 2–100 chars; `gender` optional free text, 1–50 chars; `notes` optional, at most 1000 characters (line breaks allowed); `consent` must be `true`. The database enforces the limits on every field above except `name` and `consent` as a backstop.
+  3. In one DB transaction, claim the `Idempotency-Key`: the same key and the same normalised body within 24 h returns the stored answer (`201`, header `Idempotent-Replayed: true`) and creates nothing; the same key with a different body is `409 IDEMPOTENCY_CONFLICT`. Only a successful answer is stored, so after a failure the same key may be used again.
+  4. Package exists (`404 PACKAGE_NOT_FOUND`) and is active (`409 PACKAGE_NOT_ACTIVE`). This is the one read that supplies the price and title snapshot.
+  5. Caller has fewer than 5 bookings currently `PENDING_PAYMENT` (any age, no time window). *(Built in chunk B2.)*
+  6. Caller has fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day). *(Built in chunk B2.)*
+  7. Insert the booking and the stored answer in that same transaction: `amount_paise` from the package, `consent_at = now`, request IP and user-agent stored.
 - The two caps are independent of each other and both are counted per `userId` (the Firebase account, never the email string).
 - `profileComplete` is not required to create a booking.
 - `201`:
@@ -186,7 +188,8 @@ There is no slot endpoint: booking is package + assessment details, and the expe
 ```
 - Errors:
   - `404 PACKAGE_NOT_FOUND`
-  - `400 VALIDATION_FAILED` (`details.fields`)
+  - `409 PACKAGE_NOT_ACTIVE`: the package exists but is not on sale.
+  - `400 VALIDATION_FAILED` (`details.fields`; also for a body that is not a readable JSON object)
   - `409 TOO_MANY_PENDING_BOOKINGS`: 5 or more bookings already `PENDING_PAYMENT`.
   - `409 DAILY_BOOKING_LIMIT`: 5 bookings already `CONFIRMED` today (IST).
   - `409 IDEMPOTENCY_CONFLICT`
@@ -282,13 +285,14 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 
 | HTTP | code | When |
 |---|---|---|
-| 400 | `VALIDATION_FAILED` | Bad input; `details.fields` maps field → message |
+| 400 | `VALIDATION_FAILED` | Bad input; `details.fields` maps field → message. Also a request body that cannot be read (malformed JSON, not an object; 413 when too large) |
 | 401 | `UNAUTHENTICATED` | Missing, malformed, expired, forged or revoked ID token, or sign-in not configured. **One identical body for every cause** (the reason is only in the server log) |
 | 403 | `EMAIL_NOT_VERIFIED` | Valid token whose email is missing or not verified. Enforced on every authenticated endpoint, only after the token itself is proven |
 | 403 | `APP_CHECK_FAILED` | Missing or invalid App Check token |
 | 403 | `UNSUPPORTED_SIGN_IN_PROVIDER` | Valid token, but signed in with a method we do not offer (only Google and email link). Nothing is created |
 | 400 | `INVALID_EMAIL` | The verified email cannot be stored (not plain ASCII, or not 3-254 characters) |
-| 404 | `PACKAGE_NOT_FOUND` / `BOOKING_NOT_FOUND` | Unknown, inactive or not owned |
+| 404 | `PACKAGE_NOT_FOUND` / `BOOKING_NOT_FOUND` | Unknown package, or unknown or not-owned booking |
+| 409 | `PACKAGE_NOT_ACTIVE` | The package exists but is not on sale |
 | 409 | `TOO_MANY_PENDING_BOOKINGS` | 5 or more bookings already `PENDING_PAYMENT` |
 | 409 | `DAILY_BOOKING_LIMIT` | 5 bookings already `CONFIRMED` today (IST) |
 | 409 | `BOOKING_NOT_PAYABLE` | Not `PENDING_PAYMENT` |

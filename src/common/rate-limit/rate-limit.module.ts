@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
 import {
+  BOOKING_CREATE_LIMIT_PER_HOUR,
+  BOOKING_CREATE_RATE_LIMITER,
+  BOOKING_CREATE_WINDOW_MS,
+  BookingCreateRateLimitGuard,
   IP_LIMIT_PER_MINUTE,
   IP_RATE_LIMITER,
   IpRateLimitGuard,
@@ -15,9 +19,11 @@ import { SlidingWindowLimiter } from './sliding-window-limiter.js';
   providers: [
     { provide: IP_RATE_LIMITER, useFactory: () => new SlidingWindowLimiter(IP_LIMIT_PER_MINUTE, RATE_LIMIT_WINDOW_MS) },
     { provide: USER_RATE_LIMITER, useFactory: () => new SlidingWindowLimiter(USER_LIMIT_PER_MINUTE, RATE_LIMIT_WINDOW_MS) },
+    { provide: BOOKING_CREATE_RATE_LIMITER, useFactory: () => new SlidingWindowLimiter(BOOKING_CREATE_LIMIT_PER_HOUR, BOOKING_CREATE_WINDOW_MS) },
     IpRateLimitGuard,
     UserRateLimitGuard,
+    BookingCreateRateLimitGuard,
   ],
-  exports: [IP_RATE_LIMITER, USER_RATE_LIMITER, IpRateLimitGuard, UserRateLimitGuard],
+  exports: [IP_RATE_LIMITER, USER_RATE_LIMITER, BOOKING_CREATE_RATE_LIMITER, IpRateLimitGuard, UserRateLimitGuard, BookingCreateRateLimitGuard],
 })
 export class RateLimitModule {}

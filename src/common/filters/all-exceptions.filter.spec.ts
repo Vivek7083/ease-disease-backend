@@ -1,4 +1,4 @@
-import { ArgumentsHost, HttpStatus, NotFoundException } from '@nestjs/common';
+import { ArgumentsHost, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { AllExceptionsFilter } from './all-exceptions.filter.js';
 import { AppException } from '../exceptions/app.exception.js';
@@ -53,6 +53,19 @@ describe('AllExceptionsFilter', () => {
         requestId: 'req-2',
       },
     });
+  });
+
+  it.each([
+    [HttpStatus.BAD_REQUEST, 'The request body could not be read'],
+    [HttpStatus.PAYLOAD_TOO_LARGE, 'The request body is too large'],
+  ])('maps the framework %i for an unreadable body to VALIDATION_FAILED in our own words', (code, message) => {
+    const filter = new AllExceptionsFilter();
+    const { host, status, json } = createHost('req-3');
+
+    filter.catch(new HttpException('Unexpected token } in JSON at position 17: {"email":"a@b.c"}', code), host);
+
+    expect(status).toHaveBeenCalledWith(code);
+    expect(json).toHaveBeenCalledWith({ error: { code: 'VALIDATION_FAILED', message, details: {}, requestId: 'req-3' } });
   });
 
   it('maps an unexpected non-HTTP error to a generic 500 INTERNAL without leaking its message', () => {

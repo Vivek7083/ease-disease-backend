@@ -18,13 +18,13 @@ import { AppException } from '../../common/exceptions/app.exception.js';
 import { DevelopmentOnlyGuard } from '../../common/guards/development-only.guard.js';
 import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { randomChars } from '../../bookings/booking-reference.js';
 import { CheckoutService } from '../checkout.service.js';
 import { PayuClient, PayuGatewayError } from '../payu/payu-client.js';
 import type { CheckoutForm } from '../payu/payu-checkout-fields.js';
 import { checkoutPageCsp, renderCheckoutPage } from './checkout-page.js';
 
 const REFERENCE_PATTERN = /^[A-Za-z0-9-]{1,32}$/;
-const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const MAX_REFERENCE_ATTEMPTS = 5;
 
 const E164_PATTERN = /^\+[1-9][0-9]{7,14}$/;
@@ -49,8 +49,6 @@ const notFound = () =>
     'Booking not found',
     HttpStatus.NOT_FOUND,
   );
-const randomChars = (count: number) =>
-  Array.from(randomBytes(count), (byte) => ALPHABET[byte % 32]).join('');
 
 /**
  * DEVELOPMENT ONLY (404 everywhere else). Lets a developer try the real PayU test checkout without a login or a

@@ -8,11 +8,16 @@ import type { LimitDecision, SlidingWindowLimiter } from './sliding-window-limit
 /** Injection tokens for the two limiter instances used by the sign-in routes. */
 export const IP_RATE_LIMITER = Symbol('IP_RATE_LIMITER');
 export const USER_RATE_LIMITER = Symbol('USER_RATE_LIMITER');
+/** Separate bucket for creating bookings: it must not share a budget with the sign-in routes. */
+export const BOOKING_CREATE_RATE_LIMITER = Symbol('BOOKING_CREATE_RATE_LIMITER');
 
 /** api-flow.md section 7: `/auth/sync` and `/me` share 30 / minute / person; 120 / minute / IP sits in front of everything. */
 export const USER_LIMIT_PER_MINUTE = 30;
 export const IP_LIMIT_PER_MINUTE = 120;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
+/** api-flow.md section 7: `POST /v1/bookings` allows 10 / hour / person (a request-rate guard, separate from the count caps). */
+export const BOOKING_CREATE_LIMIT_PER_HOUR = 10;
+export const BOOKING_CREATE_WINDOW_MS = 3_600_000;
 
 /** Answers 429 in the standard envelope, with `Retry-After` (whole seconds, at least 1) on the response. */
 function refuse(response: Response, decision: LimitDecision): never {
@@ -43,14 +48,16 @@ export class IpRateLimitGuard implements CanActivate {
 }
 
 /**
- * Must run AFTER the login guard: the key is the verified Firebase uid, which the caller cannot choose. Requests refused
- * by an earlier guard never get here, so they spend nobody's budget. A refused call never reaches the handler.
+ * Per-person limit. Must run AFTER the login guard: the key is the verified Firebase uid, which the caller cannot choose.
+ * Requests refused by an earlier guard never get here, so they spend nobody's budget. A refused call never reaches the
+ * handler. Subclasses only say which limiter (budget) they spend.
  */
-@Injectable()
-export class UserRateLimitGuard implements CanActivate {
-  private readonly logger = new Logger(UserRateLimitGuard.name);
+abstract class PerUserRateLimitGuard implements CanActivate {
+  private readonly logger: Logger;
 
-  constructor(@Inject(USER_RATE_LIMITER) private readonly limiter: SlidingWindowLimiter) {}
+  protected constructor(private readonly limiter: SlidingWindowLimiter) {
+    this.logger = new Logger(new.target.name);
+  }
 
   canActivate(context: ExecutionContext): boolean {
     const http = context.switchToHttp();
@@ -63,5 +70,21 @@ export class UserRateLimitGuard implements CanActivate {
     const fingerprint = createHash('sha256').update(identity.uid).digest('hex').slice(0, 8);
     this.logger.warn(`Per-user rate limit reached (user ${fingerprint})`);
     return refuse(http.getResponse<Response>(), decision);
+  }
+}
+
+/** `/auth/sync` and `/me`: one shared budget of 30 / minute / person. */
+@Injectable()
+export class UserRateLimitGuard extends PerUserRateLimitGuard {
+  constructor(@Inject(USER_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
+  }
+}
+
+/** `POST /v1/bookings`: 10 / hour / person. */
+@Injectable()
+export class BookingCreateRateLimitGuard extends PerUserRateLimitGuard {
+  constructor(@Inject(BOOKING_CREATE_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
   }
 }

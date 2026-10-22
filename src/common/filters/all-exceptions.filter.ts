@@ -51,6 +51,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (exception instanceof HttpException) {
+      const status = exception.getStatus();
+      // The framework answers an unreadable body (malformed JSON, a bare string or null where an object is expected, too
+      // large) with a bare 400 / 413 before any handler runs. The UI branches on `code`, and the parser's own message can
+      // quote part of the body, so say it in our words.
+      if (status === HttpStatus.BAD_REQUEST || status === HttpStatus.PAYLOAD_TOO_LARGE) {
+        const message = status === HttpStatus.BAD_REQUEST ? 'The request body could not be read' : 'The request body is too large';
+        return { status, body: { error: { code: 'VALIDATION_FAILED', message, details: {}, requestId } } };
+      }
       return {
         status: exception.getStatus(),
         body: {

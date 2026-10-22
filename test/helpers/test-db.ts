@@ -20,7 +20,7 @@ export function createTestPrisma(): PrismaClient {
   return new PrismaClient({ adapter: new PrismaPg({ connectionString: testDatabaseUrl() }) });
 }
 
-const TABLES = ['payment_events', 'transactions', 'bookings', 'outbox', 'packages', 'users'];
+const TABLES = ['idempotency_keys', 'payment_events', 'transactions', 'bookings', 'outbox', 'packages', 'users'];
 
 export async function truncateAll(prisma: PrismaClient): Promise<void> {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${TABLES.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE`);

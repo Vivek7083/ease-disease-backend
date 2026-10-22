@@ -35,8 +35,9 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  bookings     Booking[]
-  transactions Transaction[]
+  bookings        Booking[]
+  transactions    Transaction[]
+  idempotencyKeys IdempotencyKey[]
 
   @@map("users")
 }
@@ -207,4 +208,25 @@ model Outbox {
 
   @@index([status, nextAttemptAt])
   @@map("outbox")
+}
+
+/// One row per (Idempotency-Key, person, endpoint), written in the same transaction as the thing it protects.
+/// A committed row always carries the original answer in `response`; rows older than 24 hours are taken over by the
+/// application. Limits are CHECK constraints in the migration `*_idempotency_keys`.
+model IdempotencyKey {
+  key         String   @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  /// e.g. `POST /v1/bookings`
+  endpoint    String
+  /// sha-256 (hex) of the normalised request body: the same key with a different body is a conflict.
+  requestHash String   @map("request_hash")
+  /// The original answer, replayed as stored (jsonb may reorder the keys). Null only while the owning transaction is still open.
+  response    Json?    @db.JsonB
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([key, userId, endpoint])
+  @@index([createdAt])
+  @@map("idempotency_keys")
 }

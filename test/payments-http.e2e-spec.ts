@@ -219,7 +219,7 @@ describe('PayU callback and webhook over HTTP', () => {
 
     it('a malformed JSON body is refused by the body parser before the controller (400 envelope)', async () => {
       const res = await request(app.getHttpServer()).post(CALLBACK).type('json').send('{"txnid": ').expect(400);
-      expect(res.body.error).toMatchObject({ code: 'INTERNAL', requestId: expect.any(String) });
+      expect(res.body.error).toMatchObject({ code: 'VALIDATION_FAILED', requestId: expect.any(String) });
       expect(await prisma.paymentEvent.count()).toBe(0);
     });
   });
