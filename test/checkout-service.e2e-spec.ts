@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { Logger } from '@nestjs/common';
+import { BookingsService } from '../src/bookings/bookings.service.js';
+import { UsersService } from '../src/users/users.service.js';
 import { AppException } from '../src/common/exceptions/app.exception.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { CheckoutService } from '../src/payments/checkout.service.js';
@@ -240,32 +243,122 @@ describe('CheckoutService (real Postgres)', () => {
     );
   });
 
-  describe('data that cannot be sent to PayU is refused before anything is written', () => {
-    it('no phone: 409 PROFILE_INCOMPLETE', async () => {
-      const { user } = await createBookingFixture(prisma, { userPhone: null });
+  describe('what PayU is sent comes from the booking, never from the account (B1b)', () => {
+    it('an account with no phone and no name can pay: the form carries the booking\'s own details', async () => {
+      const { user } = await createBookingFixture(prisma, { userPhone: null, userName: null });
+      const { fields } = await checkout(user.id);
+      expect(fields).toMatchObject({ firstname: 'Priya', email: 'priya@example.com', phone: '9876543210' });
+    });
+
+    it('booking for someone else: the consultee\'s name, email and number are sent, not the account holder\'s', async () => {
+      const { user } = await createBookingFixture(prisma, {
+        userName: 'Account Holder',
+        userEmail: 'holder@example.com',
+        userPhone: '+919000000001',
+        consulteeName: 'Ravi Kumar',
+        consulteeEmail: 'ravi@example.com',
+        consulteeWhatsappNumber: '+918123456789',
+      });
+      const { fields } = await checkout(user.id);
+      expect(fields).toMatchObject({ firstname: 'Ravi', email: 'ravi@example.com', phone: '8123456789' });
+      expect(JSON.stringify(fields)).not.toMatch(/holder|Account|9000000001/);
+    });
+
+    it('the account changing later does not change a repeated checkout (same form, same hash)', async () => {
+      const { user } = await createBookingFixture(prisma);
+      const first = await checkout(user.id);
+      await prisma.user.update({ where: { id: user.id }, data: { email: 'changed@example.com', name: 'Someone Else', phone: '+919111111111' } });
+      expect(await checkout(user.id)).toEqual(first);
+    });
+
+    it('a booking made through the real create-booking code can be paid for', async () => {
+      const identity = { uid: 'uid-e2e', email: 'owner@example.com', emailVerified: true, name: undefined, signInProvider: 'google.com' };
+      const pkg = await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: AMOUNT_PAISE } });
+      const bookings = new BookingsService(prisma as never, new UsersService(prisma as never));
+      const { response } = await bookings.create(identity, crypto.randomUUID(), {
+        packageId: pkg.id,
+        name: 'Meera Nair',
+        whatsappNumber: '+91 98765 43210',
+        email: 'Meera@Example.com',
+        age: 41,
+        city: 'Kochi',
+        consent: true,
+      });
+      const owner = await prisma.user.findUniqueOrThrow({ where: { firebaseUid: 'uid-e2e' } });
+      const { fields } = await checkout(owner.id, response.booking.reference);
+      expect(fields).toMatchObject({ firstname: 'Meera', email: 'meera@example.com', phone: '9876543210', amount: '2499.00', udf1: response.booking.reference });
+    });
+  });
+
+  describe('a WhatsApp number from another country (PayU is sent the business fallback phone)', () => {
+    const abroad = { consulteeWhatsappNumber: '+14155552671' };
+
+    it('with a fallback configured: the fallback ten digits are sent and the person\'s own number is not', async () => {
+      config['PAYU_FALLBACK_PHONE'] = '9000011111';
+      const { user } = await createBookingFixture(prisma, abroad);
+      const { fields } = await checkout(user.id);
+      expect(fields.phone).toBe('9000011111');
+      expect(JSON.stringify(fields)).not.toContain('4155552671');
+    });
+
+    it('without a fallback: 409 PAYMENT_PHONE_UNSUPPORTED and nothing is written', async () => {
+      const { user } = await createBookingFixture(prisma, abroad);
       const error = await errorOf(checkout(user.id));
-      expect(error).toMatchObject({ code: 'PROFILE_INCOMPLETE' });
+      expect(error).toMatchObject({ code: 'PAYMENT_PHONE_UNSUPPORTED' });
       expect(error.getStatus()).toBe(409);
       expect(await prisma.transaction.count()).toBe(0);
     });
 
-    it.each([
-      ['a phone that is not an Indian mobile', { userPhone: '+14155550100' }, 'phone'],
-      ['an email longer than PayU\'s 50 characters', { userEmail: `${'a'.repeat(45)}@example.com` }, 'email'],
-      ['an email PayU cannot take', { userEmail: 'a|b@example.com' }, 'email'],
-    ])('%s: 400 VALIDATION_FAILED naming the field', async (_name, options, field) => {
-      const { user } = await createBookingFixture(prisma, options);
-      const error = await errorOf(checkout(user.id));
-      expect(error).toMatchObject({ code: 'VALIDATION_FAILED' });
-      expect(error.getStatus()).toBe(400);
-      expect((error.details as { fields: Record<string, string> }).fields).toHaveProperty(field);
-      expect(await prisma.transaction.count()).toBe(0);
+    it('a repeat sends the same fallback form', async () => {
+      config['PAYU_FALLBACK_PHONE'] = '9000011111';
+      const { user } = await createBookingFixture(prisma, abroad);
+      const first = await checkout(user.id);
+      expect(await checkout(user.id)).toEqual(first);
+      expect(await prisma.transaction.count()).toBe(1);
     });
 
-    it('reports both problems at once', async () => {
-      const { user } = await createBookingFixture(prisma, { userPhone: '12345', userEmail: 'nope' });
+    it('an Indian number is never replaced by the fallback', async () => {
+      config['PAYU_FALLBACK_PHONE'] = '9000011111';
+      const { user } = await createBookingFixture(prisma);
+      expect((await checkout(user.id)).fields.phone).toBe('9876543210');
+    });
+
+    it('a foreign number that merely looks like ten Indian digits is still foreign', async () => {
+      // +98 is Iran: 98 + 76543210 has the same digits as an Indian 9876543210 once the plus is dropped.
+      const { user } = await createBookingFixture(prisma, { consulteeWhatsappNumber: '+9876543210' });
+      expect(await errorOf(checkout(user.id))).toMatchObject({ code: 'PAYMENT_PHONE_UNSUPPORTED' });
+    });
+
+    it('an Indian-prefixed number that is not a mobile (starts 0-5) is treated as foreign, not sent as is', async () => {
+      const { user } = await createBookingFixture(prisma, { consulteeWhatsappNumber: '+911234567890' });
+      expect(await errorOf(checkout(user.id))).toMatchObject({ code: 'PAYMENT_PHONE_UNSUPPORTED' });
+    });
+
+    it('the log says the fallback was used but never prints a phone number', async () => {
+      config['PAYU_FALLBACK_PHONE'] = '9000011111';
+      const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+      const { user } = await createBookingFixture(prisma, abroad);
+      await checkout(user.id);
+      const text = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+      log.mockRestore();
+      expect(text).toContain('fallback phone');
+      expect(text).not.toMatch(/9000011111|4155552671/);
+    });
+  });
+
+  describe('data that cannot be sent to PayU is refused before anything is written', () => {
+    it('an email PayU cannot take (only possible for a hand-edited row, since the database forbids it): 400 VALIDATION_FAILED naming the email', async () => {
+      const { user, booking } = await createBookingFixture(prisma);
+      // The database CHECK makes such a row impossible to store, so the booking is replaced in the read.
+      const real = prisma.booking.findUnique.bind(prisma.booking) as (args: unknown) => Promise<Record<string, unknown> | null>;
+      vi.spyOn(prisma.booking, 'findUnique').mockImplementation(((args: unknown) =>
+        real(args).then((row) => (row && row['id'] === booking.id ? { ...row, consulteeEmail: 'a|b@example.com' } : row))) as never);
       const error = await errorOf(checkout(user.id));
-      expect(Object.keys((error.details as { fields: object }).fields).sort()).toEqual(['email', 'phone']);
+      vi.restoreAllMocks();
+      expect(error).toMatchObject({ code: 'VALIDATION_FAILED' });
+      expect(error.getStatus()).toBe(400);
+      expect((error.details as { fields: Record<string, string> }).fields).toHaveProperty('email');
+      expect(await prisma.transaction.count()).toBe(0);
     });
 
     it('payments not configured: 503, and no transaction left behind', async () => {
@@ -292,7 +385,7 @@ describe('CheckoutService (real Postgres)', () => {
   describe('hostile data', () => {
     it('a name and package title full of markup, pipes and SQL are cleaned, and the hash still verifies', async () => {
       const { user } = await createBookingFixture(prisma, {
-        userName: "<script>alert(1)</script>'; DROP TABLE bookings; --",
+        consulteeName: "<script>alert(1)</script>'; DROP TABLE bookings; --",
         packageTitle: 'Consult | Plan <img src=x onerror=alert(1)>',
       });
       const { fields } = await checkout(user.id);

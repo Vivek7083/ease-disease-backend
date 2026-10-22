@@ -15,7 +15,7 @@ const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 export const CALLBACK_PATH = '/v1/payments/payu/callback';
 
-export type CheckoutFieldErrorCode = 'EMAIL_INVALID' | 'EMAIL_TOO_LONG' | 'PHONE_INVALID' | 'AMOUNT_INVALID' | 'REFERENCE_INVALID';
+export type CheckoutFieldErrorCode = 'EMAIL_INVALID' | 'EMAIL_TOO_LONG' | 'PHONE_INVALID' | 'PHONE_UNSUPPORTED' | 'AMOUNT_INVALID' | 'REFERENCE_INVALID';
 
 /** The data we were given cannot be sent to PayU as is. The caller turns this into the right API error. */
 export class CheckoutFieldError extends Error {
@@ -59,6 +59,28 @@ export function cleanPhone(raw: string): string {
     throw new CheckoutFieldError('PHONE_INVALID', 'Phone must be a 10-digit Indian mobile number');
   }
   return digits;
+}
+
+/** An Indian mobile in E.164: `+91` then ten digits, the first 6-9. */
+const INDIAN_MOBILE_E164 = /^\+91([6-9]\d{9})$/;
+
+/** What `payuPhone` decided: the ten digits to send, and whether they are the business fallback and not the person's own. */
+export interface PayuPhone {
+  phone: string;
+  usedFallback: boolean;
+}
+
+/**
+ * The phone PayU is sent for a booking, from the booking's WhatsApp number (E.164). An Indian mobile is sent as its own
+ * ten digits. Any other country's number is replaced by the business fallback number (ten digits, from configuration);
+ * with no fallback configured it cannot be paid for yet and `PHONE_UNSUPPORTED` is thrown. Only `+91` counts as Indian:
+ * a number from another country that merely looks like ten Indian digits must never be mistaken for one.
+ */
+export function payuPhone(whatsappNumber: string, fallbackPhone: string | undefined): PayuPhone {
+  const own = INDIAN_MOBILE_E164.exec(whatsappNumber)?.[1];
+  if (own) return { phone: own, usedFallback: false };
+  if (fallbackPhone) return { phone: cleanPhone(fallbackPhone), usedFallback: true };
+  throw new CheckoutFieldError('PHONE_UNSUPPORTED', 'This WhatsApp number cannot be used for payment yet');
 }
 
 /** PayU allows at most 50 characters. A strict ASCII pattern also keeps `|` and markup out of the hashed string. */

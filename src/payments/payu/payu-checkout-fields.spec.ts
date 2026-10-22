@@ -7,6 +7,7 @@ import {
   cleanFirstname,
   cleanPhone,
   cleanProductInfo,
+  payuPhone,
   validateEmail,
   type CheckoutInput,
 } from './payu-checkout-fields.js';
@@ -274,5 +275,34 @@ describe('cleaners on hostile and random input', () => {
       expect(first).toBe(first.trim());
       expect(product).toBe(product.trim());
     }
+  });
+});
+
+describe('payuPhone', () => {
+  it.each([
+    ['+919876543210', '9876543210'],
+    ['+916000000000', '6000000000'],
+    ['+919999999999', '9999999999'],
+  ])('sends an Indian mobile %s as its own ten digits', (number, phone) => {
+    expect(payuPhone(number, undefined)).toEqual({ phone, usedFallback: false });
+    expect(payuPhone(number, '9000011111')).toEqual({ phone, usedFallback: false });
+  });
+
+  it.each(['+14155552671', '+447911123456', '+9876543210', '+911234567890', '+9198765432', '+9198765432100', '+971501234567'])(
+    'sends the fallback for %s, and refuses without one',
+    (number) => {
+      expect(payuPhone(number, '9000011111')).toEqual({ phone: '9000011111', usedFallback: true });
+      expect(() => payuPhone(number, undefined)).toThrow(CheckoutFieldError);
+      expect(() => payuPhone(number, undefined)).toThrow(expect.objectContaining({ code: 'PHONE_UNSUPPORTED' }));
+    },
+  );
+
+  it('treats an empty fallback as none', () => {
+    expect(() => payuPhone('+14155552671', '')).toThrow(CheckoutFieldError);
+  });
+
+  it('does not accept a number without the plus as Indian', () => {
+    expect(() => payuPhone('919876543210', undefined)).toThrow(CheckoutFieldError);
+    expect(() => payuPhone('9876543210', undefined)).toThrow(CheckoutFieldError);
   });
 });

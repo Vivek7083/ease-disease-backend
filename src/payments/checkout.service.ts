@@ -13,7 +13,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import {
   CheckoutFieldError,
   buildCheckoutFields,
-  cleanPhone,
+  payuPhone,
   validateEmail,
   type CheckoutForm,
 } from './payu/payu-checkout-fields.js';
@@ -71,7 +71,10 @@ export class CheckoutService {
             packageTitle: true,
             /** The booking's own price snapshot: the only source of the amount. */
             amountPaise: true,
-            user: { select: { name: true, email: true, phone: true } },
+            /** Who the consultation is for, as typed on the booking form: what PayU is sent. The account's own details play no part. */
+            consulteeName: true,
+            consulteeEmail: true,
+            consulteeWhatsappNumber: true,
             transaction: {
               select: {
                 id: true,
@@ -119,14 +122,10 @@ export class CheckoutService {
     }
 
     // Everything that can be wrong with the customer's data is checked BEFORE anything is written.
-    if (!booking.user.phone) {
-      throw new AppException(
-        'PROFILE_INCOMPLETE',
-        'Add a phone number to your profile before paying',
-        HttpStatus.CONFLICT,
-      );
-    }
-    this.validateCustomer(booking.user.email, booking.user.phone);
+    const { phone, usedFallback } = this.customerPhone(
+      booking.consulteeEmail,
+      booking.consulteeWhatsappNumber,
+    );
     const creds = this.credentials.get(); // 503 when payments are not configured, before any write
 
     const { transaction, created } = booking.transaction
@@ -138,9 +137,9 @@ export class CheckoutService {
       txnid: transaction.orderId,
       amountPaise: transaction.amountPaise,
       productTitle: booking.packageTitle,
-      customerName: booking.user.name,
-      email: booking.user.email,
-      phone: booking.user.phone,
+      customerName: booking.consulteeName,
+      email: booking.consulteeEmail,
+      phone,
       bookingReference: booking.reference,
       apiPublicUrl:
         this.config.get('API_PUBLIC_URL', { infer: true }) ??
@@ -151,28 +150,43 @@ export class CheckoutService {
         `Checkout for ${booking.reference}: ${form.warnings.join('; ')}`,
       );
     }
+    if (created && usedFallback) {
+      this.logger.log(
+        `Checkout for ${booking.reference}: the WhatsApp number is not Indian, so the business fallback phone was sent to PayU`,
+      );
+    }
     return form;
   }
 
-  private validateCustomer(email: string, phone: string): void {
-    const fields: Record<string, string> = {};
-    for (const [field, check] of [
-      ['email', () => validateEmail(email)],
-      ['phone', () => cleanPhone(phone)],
-    ] as const) {
-      try {
-        check();
-      } catch (error) {
-        if (!(error instanceof CheckoutFieldError)) throw error;
-        fields[field] = error.message;
-      }
-    }
-    if (Object.keys(fields).length > 0) {
+  /**
+   * The phone PayU is sent, after checking the booking's email. The email was already validated when the booking was
+   * created (and the database enforces it), so a failure here means a hand-edited row: refused with `VALIDATION_FAILED`
+   * before anything is written. A number that is not Indian and has no fallback is a valid booking whose payment step
+   * cannot proceed yet: `409 PAYMENT_PHONE_UNSUPPORTED`.
+   */
+  private customerPhone(email: string, whatsappNumber: string) {
+    try {
+      validateEmail(email);
+    } catch (error) {
+      if (!(error instanceof CheckoutFieldError)) throw error;
       throw new AppException(
         'VALIDATION_FAILED',
-        'Your profile details cannot be sent to the payment gateway',
+        'The booking details cannot be sent to the payment gateway',
         HttpStatus.BAD_REQUEST,
-        { fields },
+        { fields: { email: error.message } },
+      );
+    }
+    try {
+      return payuPhone(
+        whatsappNumber,
+        this.config.get('PAYU_FALLBACK_PHONE', { infer: true }),
+      );
+    } catch (error) {
+      if (!(error instanceof CheckoutFieldError)) throw error;
+      throw new AppException(
+        'PAYMENT_PHONE_UNSUPPORTED',
+        error.message,
+        HttpStatus.CONFLICT,
       );
     }
   }

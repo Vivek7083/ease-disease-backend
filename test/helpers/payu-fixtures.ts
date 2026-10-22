@@ -68,6 +68,11 @@ export interface BookingFixtureOptions {
   /** Stored as given (the profile step normalises to E.164 in real life). `null` = no phone yet. */
   userPhone?: string | null;
   packageTitle?: string;
+  /** The booking form's person (the `consultee_*` columns), which is what checkout sends to PayU. Defaults to CONSULTEE. */
+  consulteeName?: string;
+  consulteeEmail?: string;
+  /** E.164. */
+  consulteeWhatsappNumber?: string;
 }
 
 export interface CheckoutFixtureOptions extends BookingFixtureOptions {
@@ -86,6 +91,9 @@ export async function createBookingFixture(prisma: PrismaClient, options: Bookin
     userEmail = 'priya@example.com',
     userPhone = '+919876543210',
     packageTitle = 'One-Time Consult',
+    consulteeName = CONSULTEE.consulteeName,
+    consulteeEmail = CONSULTEE.consulteeEmail,
+    consulteeWhatsappNumber = CONSULTEE.consulteeWhatsappNumber,
   } = options;
 
   const user = await prisma.user.create({
@@ -103,6 +111,9 @@ export async function createBookingFixture(prisma: PrismaClient, options: Bookin
       packageTitle,
       amountPaise,
       ...CONSULTEE,
+      consulteeName,
+      consulteeEmail,
+      consulteeWhatsappNumber,
       notes,
       consentAt: new Date(),
     },

@@ -39,6 +39,19 @@ export const envSchema = z
     PAYU_ENV: z.enum(['test', 'live']).default('test'),
     PAYU_KEY: z.string().min(1).optional(),
     PAYU_SALT: z.string().min(1).optional(),
+    /**
+     * A business-owned Indian mobile number (ten digits, optionally written +91...), sent to PayU as the customer phone when the
+     * booking's WhatsApp number is from another country. Optional; without it such bookings cannot be paid yet.
+     */
+    PAYU_FALLBACK_PHONE: z.preprocess(
+      blankToUndefined,
+      z
+        .string()
+        .trim()
+        .regex(/^(?:\+91)?[6-9]\d{9}$/, 'must be an Indian mobile number: ten digits starting 6-9, optionally written +91...')
+        .transform((value) => value.slice(-10))
+        .optional(),
+    ),
     /** Where PayU's browser callback sends the user. An origin only; the path is always ours. */
     FRONTEND_BASE_URL: originUrl().optional(),
     /**

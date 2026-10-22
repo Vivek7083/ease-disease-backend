@@ -141,6 +141,23 @@ describe('envSchema', () => {
       expect(() => envSchema.parse({ ...validEnv, PAYU_KEY: '' })).toThrow();
     });
 
+    describe('PAYU_FALLBACK_PHONE', () => {
+      it('is optional, and blank counts as not set', () => {
+        expect(envSchema.parse(validEnv).PAYU_FALLBACK_PHONE).toBeUndefined();
+        expect(envSchema.parse({ ...validEnv, PAYU_FALLBACK_PHONE: '  ' }).PAYU_FALLBACK_PHONE).toBeUndefined();
+      });
+      it.each([
+        ['9000011111', '9000011111'],
+        ['+919000011111', '9000011111'],
+        [' 9000011111 ', '9000011111'],
+      ])('accepts %j as %j', (raw, expected) => {
+        expect(envSchema.parse({ ...validEnv, PAYU_FALLBACK_PHONE: raw }).PAYU_FALLBACK_PHONE).toBe(expected);
+      });
+      it.each(['12345', '5000011111', '90000111112', '+14155552671', '9000-011111', 'abc', '919000011111'])('rejects %j so a typo stops the boot', (raw) => {
+        expect(() => envSchema.parse({ ...validEnv, PAYU_FALLBACK_PHONE: raw })).toThrow(/PAYU_FALLBACK_PHONE/);
+      });
+    });
+
     it('rejects an unknown PAYU_ENV', () => {
       expect(() => envSchema.parse({ ...validEnv, PAYU_ENV: 'sandbox' })).toThrow();
     });

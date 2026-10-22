@@ -220,6 +220,7 @@ There is no slot endpoint: booking is package + assessment details, and the expe
   - Booking is owned by the caller and `PENDING_PAYMENT`.
   - An existing `CREATED`/`INITIATED` transaction is **reused regardless of age** (same fields), so double-clicks don't create double payments. There is one transaction per booking.
   - The request IP and user-agent are stored on the transaction when it is created (chargeback evidence).
+  - **PayU is sent the booking's details, never the account's:** `firstname` is the first word of the booking's `name`, `email` is the booking's `email`, and `phone` is the booking's WhatsApp number as ten digits when it is an Indian mobile (`+91`), otherwise the business fallback phone from configuration (`PAYU_FALLBACK_PHONE`). With no fallback configured such a booking answers `409 PAYMENT_PHONE_UNSUPPORTED`. Whether PayU accepts the fallback is proven only by a manual test-mode payment.
 - Creates the transaction: `order_id` = `EDTX` + ULID (≤ 25 chars, PayU txnid limit), status `INITIATED`, amount from the booking snapshot.
 - Hash: `sha512(key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||SALT)`, with amount as `"1500.00"` and `udf1` = booking ref.
 - `200`:
@@ -232,7 +233,7 @@ There is no slot endpoint: booking is package + assessment details, and the expe
               "udf1": "ED-7K3QXM", "hash": "…" } }
 ```
 - The merchant `key` is public by design. **The salt never leaves the server.** Staging returns `https://test.payu.in/_payment`.
-- Errors: `404 BOOKING_NOT_FOUND`, `409 BOOKING_NOT_PAYABLE`.
+- Errors: `404 BOOKING_NOT_FOUND`, `409 BOOKING_NOT_PAYABLE`, `409 PAYMENT_PHONE_UNSUPPORTED`.
 
 **`POST /v1/payments/payu/callback`** 🌐. `application/x-www-form-urlencoded` from PayU via the user's browser (surl/furl).
 - **Authenticated by hash, not by token** (it is a cross-site form POST).
@@ -296,6 +297,7 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | 409 | `TOO_MANY_PENDING_BOOKINGS` | 5 or more bookings already `PENDING_PAYMENT` |
 | 409 | `DAILY_BOOKING_LIMIT` | 5 bookings already `CONFIRMED` today (IST) |
 | 409 | `BOOKING_NOT_PAYABLE` | Not `PENDING_PAYMENT` |
+| 409 | `PAYMENT_PHONE_UNSUPPORTED` | The booking's WhatsApp number is not an Indian mobile and no fallback phone is configured, so PayU cannot be sent a phone yet |
 | 409 | `IDEMPOTENCY_CONFLICT` | Same key, different body |
 | 429 | `RATE_LIMITED` | Throttled |
 | 500 | `INTERNAL` | Unexpected; includes `requestId` |
