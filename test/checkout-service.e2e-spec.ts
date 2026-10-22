@@ -283,7 +283,7 @@ describe('CheckoutService (real Postgres)', () => {
         age: 41,
         city: 'Kochi',
         consent: true,
-      });
+      }, { ip: null, userAgent: null });
       const owner = await prisma.user.findUniqueOrThrow({ where: { firebaseUid: 'uid-e2e' } });
       const { fields } = await checkout(owner.id, response.booking.reference);
       expect(fields).toMatchObject({ firstname: 'Meera', email: 'meera@example.com', phone: '9876543210', amount: '2499.00', udf1: response.booking.reference });
@@ -374,7 +374,7 @@ describe('CheckoutService (real Postgres)', () => {
 
     it('a database failure while creating the transaction surfaces as an error and leaves nothing half-done', async () => {
       const { user } = await createBookingFixture(prisma);
-      vi.spyOn(prisma.transaction, 'create').mockRejectedValueOnce(new Error('connection terminated'));
+      vi.spyOn(prisma, '$queryRaw').mockRejectedValueOnce(new Error('connection terminated'));
       await expect(checkout(user.id)).rejects.toThrow('connection terminated');
       vi.restoreAllMocks();
       expect(await prisma.transaction.count()).toBe(0);

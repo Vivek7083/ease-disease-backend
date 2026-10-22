@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module.js';
+import { RateLimitModule } from '../common/rate-limit/rate-limit.module.js';
+import { UsersModule } from '../users/users.module.js';
 import { SlidingWindowLimiter } from '../common/rate-limit/sliding-window-limiter.js';
+import { CheckoutController } from './checkout.controller.js';
 import { CheckoutService, TXNID_GENERATOR } from './checkout.service.js';
 import { PaymentHandlerService } from './payment-handler.service.js';
 import {
@@ -13,8 +17,8 @@ import { generateTxnid } from './payu/payu-txnid.js';
 import { ReconcileService } from './reconcile.service.js';
 
 @Module({
-  imports: [PayuModule],
-  controllers: [PaymentsController, PaymentsDevController],
+  imports: [PayuModule, AuthModule, RateLimitModule, UsersModule],
+  controllers: [PaymentsController, CheckoutController, PaymentsDevController],
   providers: [
     PaymentHandlerService,
     ReconcileService,

@@ -79,6 +79,15 @@ export class UsersService {
     return this.toResponse(this.single(created ? [created] : []));
   }
 
+  /**
+   * The account row id for a Firebase account, or nothing. Never creates a row: routes that act on something the person
+   * already owns (a payment) must not conjure an account.
+   */
+  async findUserId(firebaseUid: string): Promise<string | undefined> {
+    const row = await this.prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
+    return row?.id;
+  }
+
   private async select(firebaseUid: string): Promise<UserRow | undefined> {
     const rows = await this.prisma.$queryRaw<UserRow[]>`
       SELECT id, email, name, phone, to_char(dob, 'YYYY-MM-DD') AS dob, auth_provider, last_auth_provider

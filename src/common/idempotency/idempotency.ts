@@ -6,6 +6,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 /** api-flow.md section 3: a uuid v4. Matched case-insensitively and stored lower-case. */
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const IDEMPOTENCY_HEADER = 'Idempotency-Key';
+/** Added to an answer that is the stored reply to an earlier identical request. */
+export const REPLAYED_HEADER = 'Idempotent-Replayed';
 
 /** The header value as a lower-case uuid, or `400 VALIDATION_FAILED` naming the header. */
 export function parseIdempotencyKey(header: string | string[] | undefined): string {

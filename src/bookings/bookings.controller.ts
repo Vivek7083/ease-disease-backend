@@ -6,7 +6,7 @@ import { CurrentIdentity } from '../auth/current-identity.decorator.js';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard.js';
 import type { VerifiedIdentity } from '../auth/identity-verifier.js';
 import { requestOrigin } from '../common/http/request-origin.js';
-import { IDEMPOTENCY_HEADER, parseIdempotencyKey } from '../common/idempotency/idempotency.js';
+import { IDEMPOTENCY_HEADER, REPLAYED_HEADER, parseIdempotencyKey } from '../common/idempotency/idempotency.js';
 import { BookingCreateRateLimitGuard, IpRateLimitGuard } from '../common/rate-limit/rate-limit.guards.js';
 import { ErrorEnvelopeDto } from '../users/users.dto.js';
 import { CreateBookingRequestDto, CreateBookingResponseDto } from './bookings.dto.js';
@@ -14,7 +14,6 @@ import { BookingsService, type CreateBookingResponse } from './bookings.service.
 
 /** Personal data: browsers and proxies must not keep a copy. */
 const NO_STORE = 'no-store';
-export const REPLAYED_HEADER = 'Idempotent-Replayed';
 
 @ApiTags('bookings')
 @Controller('v1')

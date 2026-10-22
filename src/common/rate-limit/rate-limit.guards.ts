@@ -10,6 +10,8 @@ export const IP_RATE_LIMITER = Symbol('IP_RATE_LIMITER');
 export const USER_RATE_LIMITER = Symbol('USER_RATE_LIMITER');
 /** Separate bucket for creating bookings: it must not share a budget with the sign-in routes. */
 export const BOOKING_CREATE_RATE_LIMITER = Symbol('BOOKING_CREATE_RATE_LIMITER');
+/** Another separate bucket: asking for a payment form must not spend the booking budget, nor the other way round. */
+export const CHECKOUT_RATE_LIMITER = Symbol('CHECKOUT_RATE_LIMITER');
 
 /** api-flow.md section 7: `/auth/sync` and `/me` share 30 / minute / person; 120 / minute / IP sits in front of everything. */
 export const USER_LIMIT_PER_MINUTE = 30;
@@ -18,6 +20,9 @@ export const RATE_LIMIT_WINDOW_MS = 60_000;
 /** api-flow.md section 7: `POST /v1/bookings` allows 10 / hour / person (a request-rate guard, separate from the count caps). */
 export const BOOKING_CREATE_LIMIT_PER_HOUR = 10;
 export const BOOKING_CREATE_WINDOW_MS = 3_600_000;
+/** api-flow.md section 7: `POST /v1/bookings/{ref}/checkout` allows 10 / hour / person. */
+export const CHECKOUT_LIMIT_PER_HOUR = 10;
+export const CHECKOUT_WINDOW_MS = 3_600_000;
 
 /** Answers 429 in the standard envelope, with `Retry-After` (whole seconds, at least 1) on the response. */
 function refuse(response: Response, decision: LimitDecision): never {
@@ -85,6 +90,14 @@ export class UserRateLimitGuard extends PerUserRateLimitGuard {
 @Injectable()
 export class BookingCreateRateLimitGuard extends PerUserRateLimitGuard {
   constructor(@Inject(BOOKING_CREATE_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
+  }
+}
+
+/** `POST /v1/bookings/{ref}/checkout`: 10 / hour / person. */
+@Injectable()
+export class CheckoutRateLimitGuard extends PerUserRateLimitGuard {
+  constructor(@Inject(CHECKOUT_RATE_LIMITER) limiter: SlidingWindowLimiter) {
     super(limiter);
   }
 }

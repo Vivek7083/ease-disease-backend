@@ -104,7 +104,7 @@ sequenceDiagram
 | Money | Integer **paise** (`pricePaise: 150000`) + `currency: "INR"`. Format only in the UI |
 | Auth header | `Authorization: Bearer <Firebase ID token>`; the token is verified on every request |
 | App Check | `X-Firebase-AppCheck: <token>` required on `POST /v1/auth/sync`, `POST /v1/bookings`, `POST /v1/bookings/{ref}/checkout` |
-| Idempotency | `Idempotency-Key: <uuid v4>` required on `POST /v1/bookings` and `/checkout`. The same key from the same user within 24 h returns the original response; the same key with a different body returns `409 IDEMPOTENCY_CONFLICT` |
+| Idempotency | `Idempotency-Key: <uuid v4>` required on `POST /v1/bookings` and `/checkout`. The same key from the same user within 24 h returns the original response; the same key with a different body returns `409 IDEMPOTENCY_CONFLICT`. A replayed answer carries the header `Idempotent-Replayed: true`. Only successful answers are stored. One deliberate exception on `/checkout`: a replay is answered from the stored form only while the booking is still payable, otherwise `409 BOOKING_NOT_PAYABLE` |
 | Tracing | Every response carries `X-Request-Id`, which is also in logs and error bodies |
 | Pagination | Cursor based: `?limit=20&cursor=<opaque>` → `{ items, nextCursor }` |
 | Errors | `{ "error": { "code": "DAILY_BOOKING_LIMIT", "message": "Human readable", "details": {}, "requestId": "..." } }`. **The UI branches on `code`.** |
@@ -233,7 +233,8 @@ There is no slot endpoint: booking is package + assessment details, and the expe
               "udf1": "ED-7K3QXM", "hash": "…" } }
 ```
 - The merchant `key` is public by design. **The salt never leaves the server.** Staging returns `https://test.payu.in/_payment`.
-- Errors: `404 BOOKING_NOT_FOUND`, `409 BOOKING_NOT_PAYABLE`, `409 PAYMENT_PHONE_UNSUPPORTED`.
+- The answer is exactly `gatewayUrl`, `method` and `fields` (no internal warnings), with `Cache-Control: no-store`. Guards: per-address limit, App Check, login **with the revocation check** (a revoked or disabled account is refused even with an unexpired token), then 10 requests per hour per person (repeats count). A person with no account row gets `404 BOOKING_NOT_FOUND`; this route never creates an account.
+- Errors: `400 VALIDATION_FAILED` (bad `Idempotency-Key`), `404 BOOKING_NOT_FOUND`, `409 BOOKING_NOT_PAYABLE`, `409 PAYMENT_PHONE_UNSUPPORTED`, `409 IDEMPOTENCY_CONFLICT`, `429 RATE_LIMITED`, `503 PAYMENT_GATEWAY_UNAVAILABLE`.
 
 **`POST /v1/payments/payu/callback`** 🌐. `application/x-www-form-urlencoded` from PayU via the user's browser (surl/furl).
 - **Authenticated by hash, not by token** (it is a cross-site form POST).
