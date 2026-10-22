@@ -131,7 +131,7 @@ describe('PayuClient.verifyPayment', () => {
   it('does not leak the salt or response body into error messages', async () => {
     const error = await clientWith(reply('secret-body test_salt', 500))
       .verifyPayment(TXNID)
-      .catch((e: unknown) => e as Error);
+      .then(() => new Error('the call was expected to fail'), (e: unknown) => e as Error);
     expect(error.message).not.toContain('test_salt');
     expect(error.message).not.toContain('secret-body');
   });

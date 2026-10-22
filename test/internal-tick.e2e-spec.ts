@@ -4,6 +4,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter.js';
+import { IdempotencyCleanupService } from '../src/common/idempotency/idempotency-cleanup.service.js';
 import { RequestIdMiddleware } from '../src/common/middleware/request-id.middleware.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { InternalModule } from '../src/internal/internal.module.js';
@@ -150,6 +151,7 @@ describe('POST /v1/internal/tick', () => {
 
       expect(res.body).toEqual({
         reconcile: { checked: 1, applied: 0, failed: 1, pending: 0, mismatch: 0, duplicate: 0, notFound: 0, errors: 0, stoppedOnGatewayError: false },
+        cleanup: { idempotencyKeysDeleted: 0 },
       });
       expect((await prisma.transaction.findFirstOrThrow()).status).toBe('FAILURE');
       expect((await prisma.booking.findFirstOrThrow()).status).toBe('FAILED');
@@ -211,6 +213,60 @@ describe('POST /v1/internal/tick', () => {
       const res = await tick(authed()).expect(500);
       expect(res.body.error).toMatchObject({ code: 'INTERNAL', requestId: expect.any(String) });
       expect(JSON.stringify(res.body)).not.toContain('secret db detail');
+    });
+  });
+
+  describe('idempotency key cleanup', () => {
+    const KEY_OLD_1 = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
+    const KEY_OLD_2 = '0b9f8c1e-3d2a-4b6c-9e5f-7a1d2c3b4e5f';
+    const KEY_NEW = '9c1d3e5f-7a2b-4c4d-8e6f-1a2b3c4d5e6f';
+    const seedKeys = async () => {
+      const user = await prisma.user.create({ data: { firebaseUid: 'u1', email: 'u1@example.com', authProvider: 'google.com', lastAuthProvider: 'google.com' } });
+      const make = (key: string, hoursAgo: number) =>
+        prisma.idempotencyKey.create({ data: { key, userId: user.id, endpoint: 'POST /v1/bookings', requestHash: 'a'.repeat(64), createdAt: new Date(Date.now() - hoursAgo * 3_600_000) } });
+      await make(KEY_OLD_1, 25);
+      await make(KEY_OLD_2, 72);
+      await make(KEY_NEW, 23);
+    };
+
+    it('deletes keys older than 24 hours, keeps newer ones, and reports the count', async () => {
+      await createApp();
+      await seedKeys();
+      const res = await tick(authed()).expect(200);
+      expect(res.body.cleanup).toEqual({ idempotencyKeysDeleted: 2 });
+      expect((await prisma.idempotencyKey.findMany()).map((row) => row.key)).toEqual([KEY_NEW]);
+    });
+
+    it('runs together with the payment sweep, and an empty table is a plain zero', async () => {
+      await createApp();
+      await dueTransaction();
+      payu.verifyPayment.mockResolvedValue(FAILURE);
+      const res = await tick(authed()).expect(200);
+      expect(res.body).toEqual({ reconcile: expect.objectContaining({ checked: 1, failed: 1 }), cleanup: { idempotencyKeysDeleted: 0 } });
+    });
+
+    it('a cleanup failure is the standard 500 (the scheduler reports it) and the payment sweep had already run', async () => {
+      await createApp('production', (builder) => builder.overrideProvider(IdempotencyCleanupService).useValue({ run: () => Promise.reject(new Error('secret db detail')) }));
+      await dueTransaction();
+      payu.verifyPayment.mockResolvedValue(FAILURE);
+      const res = await tick(authed()).expect(500);
+      expect(res.body.error).toMatchObject({ code: 'INTERNAL', requestId: expect.any(String) });
+      expect(JSON.stringify(res.body)).not.toContain('secret db detail');
+      expect((await prisma.booking.findFirstOrThrow()).status).toBe('FAILED');
+    });
+
+    it('a request without the scheduler token deletes nothing', async () => {
+      await createApp();
+      await seedKeys();
+      await tick().expect(401);
+      expect(await prisma.idempotencyKey.count()).toBe(3);
+    });
+
+    it('the development tick cleans up too', async () => {
+      await createApp('development');
+      await seedKeys();
+      const res = await request(app.getHttpServer()).post('/dev/tick').expect(200);
+      expect(res.body.cleanup).toEqual({ idempotencyKeysDeleted: 2 });
     });
   });
 

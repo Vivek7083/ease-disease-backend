@@ -1,4 +1,6 @@
+import type { Mock } from 'vitest';
 import { AppException } from '../src/common/exceptions/app.exception.js';
+import type { PayuClient } from '../src/payments/payu/payu-client.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { PaymentHandlerService } from '../src/payments/payment-handler.service.js';
 import type { PayuCredentialsProvider } from '../src/payments/payu/payu-credentials.provider.js';
@@ -13,7 +15,7 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
   let prisma: PrismaClient;
   let handler: PaymentHandlerService;
   let credentials: { get: () => unknown };
-  let payu: { verifyPayment: ReturnType<typeof vi.fn> };
+  let payu: { verifyPayment: Mock<PayuClient['verifyPayment']> };
 
   beforeAll(() => {
     prisma = createTestPrisma();
@@ -25,7 +27,7 @@ describe('PaymentHandlerService: stop paths and event logging (real Postgres)', 
     await truncateAll(prisma);
     credentials = { get: () => CREDS };
     // Default: PayU does not know the transaction, so these tests exercise logging without moving any state.
-    payu = { verifyPayment: vi.fn().mockResolvedValue({ outcome: 'not_found' }) };
+    payu = { verifyPayment: vi.fn<PayuClient['verifyPayment']>().mockResolvedValue({ outcome: 'not_found' }) };
     handler = new PaymentHandlerService(prisma, credentials as PayuCredentialsProvider, payu);
   });
 

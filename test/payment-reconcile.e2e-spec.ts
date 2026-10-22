@@ -1,7 +1,8 @@
+import type { Mock } from 'vitest';
 import { AppException } from '../src/common/exceptions/app.exception.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { PaymentHandlerService } from '../src/payments/payment-handler.service.js';
-import { PayuGatewayError, type PayuVerifyResult } from '../src/payments/payu/payu-client.js';
+import { PayuGatewayError, type PayuVerifyResult, type PayuClient } from '../src/payments/payu/payu-client.js';
 import type { PayuCredentialsProvider } from '../src/payments/payu/payu-credentials.provider.js';
 import { AMOUNT_PAISE, CREDS, REFERENCE, TXNID, createCheckoutFixture, signedPayload, snapshot, type CheckoutFixtureOptions } from './helpers/payu-fixtures.js';
 import { createTestPrisma, truncateAll } from './helpers/test-db.js';
@@ -14,7 +15,7 @@ import { createTestPrisma, truncateAll } from './helpers/test-db.js';
 describe('PaymentHandlerService.reconcile (real Postgres, PayU faked)', () => {
   let prisma: PrismaClient;
   let handler: PaymentHandlerService;
-  let payu: { verifyPayment: ReturnType<typeof vi.fn> };
+  let payu: { verifyPayment: Mock<PayuClient['verifyPayment']> };
 
   const found = (overrides: Partial<Extract<PayuVerifyResult, { outcome: 'found' }>> = {}): PayuVerifyResult => ({
     outcome: 'found',
@@ -40,7 +41,7 @@ describe('PaymentHandlerService.reconcile (real Postgres, PayU faked)', () => {
   });
   beforeEach(async () => {
     await truncateAll(prisma);
-    payu = { verifyPayment: vi.fn().mockResolvedValue(found()) };
+    payu = { verifyPayment: vi.fn<PayuClient['verifyPayment']>().mockResolvedValue(found()) };
     handler = new PaymentHandlerService(prisma, { get: () => CREDS } as unknown as PayuCredentialsProvider, payu);
   });
 

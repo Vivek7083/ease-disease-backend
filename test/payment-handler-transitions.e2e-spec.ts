@@ -1,3 +1,4 @@
+import type { Mock } from 'vitest';
 import { AppException } from '../src/common/exceptions/app.exception.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { PaymentHandlerService, type HandleResult } from '../src/payments/payment-handler.service.js';
@@ -14,7 +15,7 @@ import { createTestPrisma, truncateAll } from './helpers/test-db.js';
 describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () => {
   let prisma: PrismaClient;
   let handler: PaymentHandlerService;
-  let payu: { verifyPayment: ReturnType<typeof vi.fn> };
+  let payu: { verifyPayment: Mock<PayuClient['verifyPayment']> };
   const NOTES = 'Private symptom notes: bloating after meals';
 
   const found = (overrides: Partial<Extract<PayuVerifyResult, { outcome: 'found' }>> = {}): PayuVerifyResult => ({
@@ -41,7 +42,7 @@ describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () =>
   });
   beforeEach(async () => {
     await truncateAll(prisma);
-    payu = { verifyPayment: vi.fn().mockResolvedValue(found()) };
+    payu = { verifyPayment: vi.fn<PayuClient['verifyPayment']>().mockResolvedValue(found()) };
     handler = new PaymentHandlerService(prisma, { get: () => CREDS } as unknown as PayuCredentialsProvider, payu);
   });
 

@@ -265,7 +265,7 @@ There is no slot endpoint: booking is package + assessment details, and the expe
 **`POST /v1/internal/tick`**. Cloud Scheduler every 5 min. Only accepted with a Google-signed OIDC token for the scheduler's service account (audience = API URL).
 1. **Reconcile:** transactions `INITIATED` or `PENDING` between 20 min and 24 h old → `verify_payment` → payment handler. Nothing is marked `EXPIRED` from our side.
 2. **Outbox:** send due emails, with exponential backoff, max 8 attempts, then alert.
-3. **Cleanup:** idempotency keys older than 24 h.
+3. **Cleanup (built):** idempotency keys older than 24 h are deleted. The answer is `200 { "reconcile": { ... }, "cleanup": { "idempotencyKeysDeleted": 0 } }`. Reconcile runs first; a cleanup failure is a `500` (the scheduler reports it). An old key is already free for reuse without this step, so nothing depends on it.
 
 (The former "expire holds" step was removed: there is no hold.)
 

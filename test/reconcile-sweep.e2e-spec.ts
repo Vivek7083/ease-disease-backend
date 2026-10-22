@@ -1,6 +1,7 @@
+import type { Mock } from 'vitest';
 import type { PrismaClient, TransactionStatus } from '../src/generated/prisma/client.js';
 import { PaymentHandlerService } from '../src/payments/payment-handler.service.js';
-import { PayuGatewayError, type PayuVerifyResult } from '../src/payments/payu/payu-client.js';
+import { PayuGatewayError, type PayuVerifyResult, type PayuClient } from '../src/payments/payu/payu-client.js';
 import type { PayuCredentialsProvider } from '../src/payments/payu/payu-credentials.provider.js';
 import { RECONCILE_DEFAULT_BATCH_SIZE, ReconcileService } from '../src/payments/reconcile.service.js';
 import { AMOUNT_PAISE, CREDS, createCheckoutFixture, signedPayload, snapshot } from './helpers/payu-fixtures.js';
@@ -16,7 +17,7 @@ describe('ReconcileService.run (real Postgres, PayU faked)', () => {
   let handler: PaymentHandlerService;
   let sweep: ReconcileService;
   let answers: Map<string, () => Promise<PayuVerifyResult>>;
-  let payu: { verifyPayment: ReturnType<typeof vi.fn> };
+  let payu: { verifyPayment: Mock<PayuClient['verifyPayment']> };
 
   // Must be in the real past: a check stamps updated_at with the real clock, which has to sort AFTER the fixtures' stamps.
   const NOW = new Date('2026-01-15T12:00:00.000Z');
@@ -72,7 +73,7 @@ describe('ReconcileService.run (real Postgres, PayU faked)', () => {
     counter = 0;
     answers = new Map();
     payu = {
-      verifyPayment: vi.fn((txnid: string) => {
+      verifyPayment: vi.fn<PayuClient['verifyPayment']>((txnid) => {
         const answer = answers.get(txnid);
         if (!answer) throw new Error(`test setup: no fake answer for ${txnid}`);
         return answer();

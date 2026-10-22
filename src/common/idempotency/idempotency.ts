@@ -8,6 +8,8 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 export const IDEMPOTENCY_HEADER = 'Idempotency-Key';
 /** Added to an answer that is the stored reply to an earlier identical request. */
 export const REPLAYED_HEADER = 'Idempotent-Replayed';
+/** "The same key from the same user within 24 h returns the original response." The claim query and the tick cleanup use this same cut-off. */
+export const IDEMPOTENCY_KEY_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 /** The header value as a lower-case uuid, or `400 VALIDATION_FAILED` naming the header. */
 export function parseIdempotencyKey(header: string | string[] | undefined): string {
