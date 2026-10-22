@@ -27,6 +27,7 @@ import {
 } from './payu/payu-checkout-fields.js';
 import { PayuCredentialsProvider } from './payu/payu-credentials.provider.js';
 import { generateTxnid } from './payu/payu-txnid.js';
+import { REUSABLE_TRANSACTION_STATUSES } from './payable.js';
 
 export const TXNID_GENERATOR = Symbol('TXNID_GENERATOR');
 export const DEFAULT_API_PUBLIC_URL = 'http://localhost:3000';
@@ -35,9 +36,6 @@ export const CHECKOUT_ENDPOINT = 'POST /v1/bookings/{reference}/checkout';
 const MAX_TXNID_ATTEMPTS = 5;
 /** Our booking references look like `ED-7K3QXM`. Anything else cannot exist, so it never reaches a query. */
 const REFERENCE_PATTERN = /^[A-Za-z0-9-]{1,32}$/;
-
-/** The only transaction states in which a checkout may be (re)issued: nothing has been decided at PayU yet. */
-const REUSABLE_TRANSACTION_STATUSES = ['CREATED', 'INITIATED'];
 
 const NO_ORIGIN: RequestOrigin = { ip: null, userAgent: null };
 

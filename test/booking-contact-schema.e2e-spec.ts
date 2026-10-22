@@ -255,7 +255,7 @@ describe('booking contact columns and request-origin columns (real Postgres)', (
       const booking = await createBooking();
       const moved = await prisma.booking.updateMany({
         where: { id: booking.id, status: 'PENDING_PAYMENT' },
-        data: { status: 'CONFIRMED', holdExpiresAt: null, updatedAt: new Date() },
+        data: { status: 'CONFIRMED', updatedAt: new Date() },
       });
       expect(moved.count).toBe(1);
     });

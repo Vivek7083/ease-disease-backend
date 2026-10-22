@@ -53,7 +53,7 @@ describe('PaymentHandlerService.reconcile (real Postgres, PayU faked)', () => {
     const tx = await prisma.transaction.findFirstOrThrow();
     const outbox = await prisma.outbox.findMany({ orderBy: { type: 'asc' } });
     return {
-      booking: { status: booking.status, holdExpiresAt: booking.holdExpiresAt },
+      booking: { status: booking.status },
       tx: {
         status: tx.status,
         paymentMode: tx.paymentMode,

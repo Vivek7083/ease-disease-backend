@@ -185,11 +185,11 @@ describe('PayU spike schema (real Postgres)', () => {
       const user = await makeUser();
       const pkg = await makePackage();
       const booking = await prisma.booking.create({
-        data: { ...bookingData(user.id, pkg.id), consentAt: when, holdExpiresAt: when, scheduledAt: when },
+        data: { ...bookingData(user.id, pkg.id), consentAt: when, confirmedAt: when, scheduledAt: when },
       });
       const read = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
       expect(read.consentAt.toISOString()).toBe('2026-10-17T01:30:00.123Z');
-      expect(read.holdExpiresAt?.toISOString()).toBe('2026-10-17T01:30:00.123Z');
+      expect(read.confirmedAt?.toISOString()).toBe('2026-10-17T01:30:00.123Z');
       expect(read.scheduledAt?.toISOString()).toBe('2026-10-17T01:30:00.123Z');
     });
 

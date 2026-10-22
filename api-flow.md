@@ -77,7 +77,7 @@ sequenceDiagram
   U->>W: Pick a package, fill the assessment form (name, WhatsApp, email, age, city, gender?, notes?, consent)
   W->>A: POST /v1/bookings (Idempotency-Key)
   A->>DB: tx: caps check (< 5 PENDING_PAYMENT open, < 5 CONFIRMED today IST) → insert booking PENDING_PAYMENT (price snapshot, IP/UA)
-  A-->>W: 201 { booking, canPay: true }
+  A-->>W: 201 { booking } (canPay: true)
   W->>A: POST /v1/bookings/{ref}/checkout (Idempotency-Key)
   A->>DB: insert/reuse transaction CREATED→INITIATED (order_id = txnid, IP/UA)
   A-->>W: { gatewayUrl, fields incl. hash }
@@ -184,7 +184,7 @@ There is no slot endpoint: booking is package + assessment details, and the expe
                "amountPaise": 150000, "currency": "INR",
                "name": "Priya Sharma", "whatsappNumber": "+919876543210", "email": "priya@example.com",
                "age": 34, "city": "Bengaluru", "gender": "Female",
-               "canPay": true, "payment": null } }
+               "canPay": true, "payment": null, "createdAt": "2026-10-22T10:00:00.123Z" } }
 ```
 - Errors:
   - `404 PACKAGE_NOT_FOUND`
@@ -195,10 +195,12 @@ There is no slot endpoint: booking is package + assessment details, and the expe
   - `409 IDEMPOTENCY_CONFLICT`
 
 **`GET /v1/bookings?status=active|past|all&limit=20&cursor=…`** 🔐. **This is My Bookings.**
-- `active` = `PENDING_PAYMENT`, `CONFIRMED`, `NEEDS_ATTENTION`. `past` = every other status.
+- `active` = `PENDING_PAYMENT`, `CONFIRMED`, `NEEDS_ATTENTION`. `past` = every other status. `all` = everything. Default `status` is `active`.
+- Newest first (creation time, ties broken by id). `limit` is a whole number 1 to 50 (default 20); `cursor` is the opaque `nextCursor` of the previous page, which is null on the last page. A bad `status`, `limit` or `cursor` is `400 VALIDATION_FAILED` (`details.fields`). Only the caller's bookings; a person with none (or no account row) gets `{ "items": [], "nextCursor": null }`.
+- Login only (no App Check). Reads have their own limits (section 7).
 ```json
 { "items": [ { "reference": "ED-7K3QXM", "status": "CONFIRMED", "packageTitle": "One-Time Consult",
-               "amountPaise": 150000, "paymentStatus": "SUCCESS" } ],
+               "amountPaise": 150000, "paymentStatus": "SUCCESS", "canPay": false, "createdAt": "2026-10-22T10:00:00.123Z" } ],
   "nextCursor": null }
 ```
 
@@ -210,7 +212,7 @@ There is no slot endpoint: booking is package + assessment details, and the expe
                "canPay": false,
                "payment": { "orderId": "EDTX01JB…", "status": "SUCCESS", "mode": "UPI", "paidAt": "…" } } }
 ```
-- `canPay` = status is `PENDING_PAYMENT`.
+- `canPay` is true only while a payment form can actually be requested: the status is `PENDING_PAYMENT` **and** the payment, if one exists, is not already in progress or decided (`CREATED` / `INITIATED` or none). It is exactly the condition under which `/checkout` accepts the booking, so a Pay button driven by it never leads to `BOOKING_NOT_PAYABLE`. `payment` is `null` before a payment was started; `paidAt` is set only for a payment PayU confirmed; `createdAt` is ISO-8601 UTC. The sender address, user-agent, consent time, expert notes and internal ids are never returned.
 - Errors: `404 BOOKING_NOT_FOUND` (also when not the owner).
 
 ### Payments
@@ -311,6 +313,7 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | Endpoint group | Limit |
 |---|---|
 | Public GETs (`/packages`) | 60 / min / IP |
+| `GET /bookings`, `GET /bookings/{ref}` | 120 / min / user (one shared budget) and 600 / min / IP, both their own buckets (the status page polls every 2 s) |
 | Sign-in routes (`/auth/sync`, `/me`), in front of everything | 120 / min / IP (counts every request, including bad tokens) |
 | `/auth/sync`, `/me` | 30 / min / user, **one shared budget** for the two routes, keyed on the verified Firebase uid |
 | `POST /bookings` | 10 / hour / user (a request-rate guard, separate from the count caps) |

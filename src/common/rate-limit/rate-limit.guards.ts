@@ -12,6 +12,9 @@ export const USER_RATE_LIMITER = Symbol('USER_RATE_LIMITER');
 export const BOOKING_CREATE_RATE_LIMITER = Symbol('BOOKING_CREATE_RATE_LIMITER');
 /** Another separate bucket: asking for a payment form must not spend the booking budget, nor the other way round. */
 export const CHECKOUT_RATE_LIMITER = Symbol('CHECKOUT_RATE_LIMITER');
+/** Reading bookings (list, detail) has its own, larger buckets: the payment status page polls every 2 seconds. */
+export const READ_RATE_LIMITER = Symbol('READ_RATE_LIMITER');
+export const READ_IP_RATE_LIMITER = Symbol('READ_IP_RATE_LIMITER');
 
 /** api-flow.md section 7: `/auth/sync` and `/me` share 30 / minute / person; 120 / minute / IP sits in front of everything. */
 export const USER_LIMIT_PER_MINUTE = 30;
@@ -23,6 +26,9 @@ export const BOOKING_CREATE_WINDOW_MS = 3_600_000;
 /** api-flow.md section 7: `POST /v1/bookings/{ref}/checkout` allows 10 / hour / person. */
 export const CHECKOUT_LIMIT_PER_HOUR = 10;
 export const CHECKOUT_WINDOW_MS = 3_600_000;
+/** api-flow.md section 7: reading bookings allows 120 / minute / person and 600 / minute / address. */
+export const READ_LIMIT_PER_MINUTE = 120;
+export const READ_IP_LIMIT_PER_MINUTE = 600;
 
 /** Answers 429 in the standard envelope, with `Retry-After` (whole seconds, at least 1) on the response. */
 function refuse(response: Response, decision: LimitDecision): never {
@@ -32,15 +38,16 @@ function refuse(response: Response, decision: LimitDecision): never {
 }
 
 /**
- * First guard on the sign-in routes: counts EVERY request from an address, including ones whose tokens turn out to be
- * garbage, so a flood from one place is slowed before any token is looked at. The address is `req.ip` as resolved by the
- * trust-proxy setting, so a forged `X-Forwarded-For` cannot pick the key.
+ * First guard on a route: counts EVERY request from an address, including ones whose tokens turn out to be garbage, so a
+ * flood from one place is slowed before any token is looked at. The address is `req.ip` as resolved by the trust-proxy
+ * setting, so a forged `X-Forwarded-For` cannot pick the key. Subclasses only say which limiter (budget) they spend.
  */
-@Injectable()
-export class IpRateLimitGuard implements CanActivate {
-  private readonly logger = new Logger(IpRateLimitGuard.name);
+abstract class PerAddressRateLimitGuard implements CanActivate {
+  private readonly logger: Logger;
 
-  constructor(@Inject(IP_RATE_LIMITER) private readonly limiter: SlidingWindowLimiter) {}
+  protected constructor(private readonly limiter: SlidingWindowLimiter) {
+    this.logger = new Logger(new.target.name);
+  }
 
   canActivate(context: ExecutionContext): boolean {
     const http = context.switchToHttp();
@@ -49,6 +56,22 @@ export class IpRateLimitGuard implements CanActivate {
     if (decision.allowed) return true;
     this.logger.warn(`Per-address rate limit reached (address ${request.ip ?? 'unknown'})`);
     return refuse(http.getResponse<Response>(), decision);
+  }
+}
+
+/** Sign-in, booking creation and checkout: 120 / minute / address, one shared bucket. */
+@Injectable()
+export class IpRateLimitGuard extends PerAddressRateLimitGuard {
+  constructor(@Inject(IP_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
+  }
+}
+
+/** Reading bookings: 600 / minute / address (offices and phone carriers share addresses), its own bucket. */
+@Injectable()
+export class ReadIpRateLimitGuard extends PerAddressRateLimitGuard {
+  constructor(@Inject(READ_IP_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
   }
 }
 
@@ -98,6 +121,14 @@ export class BookingCreateRateLimitGuard extends PerUserRateLimitGuard {
 @Injectable()
 export class CheckoutRateLimitGuard extends PerUserRateLimitGuard {
   constructor(@Inject(CHECKOUT_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
+  }
+}
+
+/** Reading bookings (list and detail): one shared budget of 120 / minute / person. */
+@Injectable()
+export class ReadRateLimitGuard extends PerUserRateLimitGuard {
+  constructor(@Inject(READ_RATE_LIMITER) limiter: SlidingWindowLimiter) {
     super(limiter);
   }
 }

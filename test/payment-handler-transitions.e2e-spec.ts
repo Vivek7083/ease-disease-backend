@@ -64,7 +64,6 @@ describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () =>
       expect(result).toEqual({ outcome: 'applied', bookingReference: REFERENCE });
       const { booking, tx, outbox, events } = await state();
       expect(booking.status).toBe('CONFIRMED');
-      expect(booking.holdExpiresAt).toBeNull();
       expect(tx).toMatchObject({
         status: 'SUCCESS',
         paymentMode: 'UPI',

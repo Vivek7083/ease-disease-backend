@@ -1,5 +1,5 @@
-import { Body, Controller, Header, Headers, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiCreatedResponse, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Header, Headers, HttpCode, HttpStatus, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiCreatedResponse, ApiHeader, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { AppCheckGuard } from '../auth/app-check.guard.js';
 import { CurrentIdentity } from '../auth/current-identity.decorator.js';
@@ -7,9 +7,10 @@ import { FirebaseAuthGuard } from '../auth/firebase-auth.guard.js';
 import type { VerifiedIdentity } from '../auth/identity-verifier.js';
 import { requestOrigin } from '../common/http/request-origin.js';
 import { IDEMPOTENCY_HEADER, REPLAYED_HEADER, parseIdempotencyKey } from '../common/idempotency/idempotency.js';
-import { BookingCreateRateLimitGuard, IpRateLimitGuard } from '../common/rate-limit/rate-limit.guards.js';
+import { BookingCreateRateLimitGuard, IpRateLimitGuard, ReadIpRateLimitGuard, ReadRateLimitGuard } from '../common/rate-limit/rate-limit.guards.js';
 import { ErrorEnvelopeDto } from '../users/users.dto.js';
-import { CreateBookingRequestDto, CreateBookingResponseDto } from './bookings.dto.js';
+import { BookingDetailResponseDto, BookingListResponseDto, CreateBookingRequestDto, CreateBookingResponseDto } from './bookings.dto.js';
+import { BookingsReadService, type BookingDetailResponse, type BookingListResponse } from './bookings-read.service.js';
 import { BookingsService, type CreateBookingResponse } from './bookings.service.js';
 
 /** Personal data: browsers and proxies must not keep a copy. */
@@ -18,7 +19,10 @@ const NO_STORE = 'no-store';
 @ApiTags('bookings')
 @Controller('v1')
 export class BookingsController {
-  constructor(private readonly bookings: BookingsService) {}
+  constructor(
+    private readonly bookings: BookingsService,
+    private readonly reads: BookingsReadService,
+  ) {}
 
   /** Guards run in order: per-address limit, App Check, login token, per-person hourly limit. */
   @Post('bookings')
@@ -63,5 +67,53 @@ export class BookingsController {
     const { response, replayed } = await this.bookings.create(identity, key, body, requestOrigin(req));
     if (replayed) res.setHeader(REPLAYED_HEADER, 'true');
     return response;
+  }
+  /**
+   * My Bookings. Login only (no App Check on reads). Reads have their own, larger limits because the payment status page
+   * polls every 2 seconds: per address, login, per person.
+   */
+  @Get('bookings')
+  @Header('Cache-Control', NO_STORE)
+  @UseGuards(ReadIpRateLimitGuard, FirebaseAuthGuard, ReadRateLimitGuard)
+  @ApiOperation({
+    summary: 'List my bookings (My Bookings)',
+    description:
+      'The caller\'s own bookings, newest first. `active` = waiting for payment, confirmed or held for a human; `past` = every other status; `all` = everything. ' +
+      'Page with `nextCursor`: pass it back as `cursor` until it is null. `canPay` says whether a payment form can be requested now.',
+  })
+  @ApiBearerAuth('firebase-id-token')
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'past', 'all'], description: 'Default `active`.' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Whole number 1 to 50. Default 20.' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'The `nextCursor` of the previous page.' })
+  @ApiOkResponse({ type: BookingListResponseDto, description: 'One page of bookings. An empty list when there are none.' })
+  @ApiResponse({ status: 400, type: ErrorEnvelopeDto, description: '`VALIDATION_FAILED`: `details.fields` names each bad parameter.' })
+  @ApiResponse({ status: 401, type: ErrorEnvelopeDto, description: '`UNAUTHENTICATED`: missing, malformed, expired or otherwise unacceptable login token (always the same answer).' })
+  @ApiResponse({ status: 403, type: ErrorEnvelopeDto, description: '`EMAIL_NOT_VERIFIED`: token proven, email missing or unverified.' })
+  @ApiResponse({ status: 429, type: ErrorEnvelopeDto, description: '`RATE_LIMITED`: over 120 reads / minute for this person or 600 / minute from this address. See `Retry-After`.' })
+  @ApiResponse({ status: 503, type: ErrorEnvelopeDto, description: '`AUTH_UNAVAILABLE`: Google could not be reached. Says nothing about the token; retry.' })
+  list(@CurrentIdentity() identity: VerifiedIdentity, @Query() query: unknown): Promise<BookingListResponse> {
+    return this.reads.list(identity, query);
+  }
+
+  /** One booking, also polled by the payment status page. A booking that is not the caller's is a 404, never a 403. */
+  @Get('bookings/:reference')
+  @Header('Cache-Control', NO_STORE)
+  @UseGuards(ReadIpRateLimitGuard, FirebaseAuthGuard, ReadRateLimitGuard)
+  @ApiOperation({
+    summary: 'Get one of my bookings',
+    description:
+      'The booking with the details typed on the form, `canPay`, and the payment (`null` before one was started; `paidAt` only for a payment PayU confirmed). ' +
+      'The payment status page polls this every 2 seconds, up to 60 seconds, until the status is final.',
+  })
+  @ApiBearerAuth('firebase-id-token')
+  @ApiParam({ name: 'reference', example: 'ED-7K3QXM', description: 'The booking reference.' })
+  @ApiOkResponse({ type: BookingDetailResponseDto, description: 'The booking.' })
+  @ApiResponse({ status: 401, type: ErrorEnvelopeDto, description: '`UNAUTHENTICATED`: missing, malformed, expired or otherwise unacceptable login token (always the same answer).' })
+  @ApiResponse({ status: 403, type: ErrorEnvelopeDto, description: '`EMAIL_NOT_VERIFIED`: token proven, email missing or unverified.' })
+  @ApiResponse({ status: 404, type: ErrorEnvelopeDto, description: '`BOOKING_NOT_FOUND`: no such booking, or it belongs to someone else (the same answer, so references cannot be probed).' })
+  @ApiResponse({ status: 429, type: ErrorEnvelopeDto, description: '`RATE_LIMITED`: over 120 reads / minute for this person or 600 / minute from this address. See `Retry-After`.' })
+  @ApiResponse({ status: 503, type: ErrorEnvelopeDto, description: '`AUTH_UNAVAILABLE`: Google could not be reached. Says nothing about the token; retry.' })
+  detail(@CurrentIdentity() identity: VerifiedIdentity, @Param('reference') reference: string): Promise<BookingDetailResponse> {
+    return this.reads.detail(identity, reference);
   }
 }

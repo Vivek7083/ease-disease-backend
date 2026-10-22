@@ -24,15 +24,15 @@ describe('AllExceptionsFilter', () => {
     const filter = new AllExceptionsFilter();
     const { host, status, json } = createHost('req-1');
 
-    const exception = new AppException('SLOT_FULL', 'Slot is full', HttpStatus.CONFLICT, { slotId: 'abc' });
+    const exception = new AppException('EXAMPLE_CONFLICT', 'Example conflict', HttpStatus.CONFLICT, { exampleId: 'abc' });
     filter.catch(exception, host);
 
     expect(status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
     expect(json).toHaveBeenCalledWith({
       error: {
-        code: 'SLOT_FULL',
-        message: 'Slot is full',
-        details: { slotId: 'abc' },
+        code: 'EXAMPLE_CONFLICT',
+        message: 'Example conflict',
+        details: { exampleId: 'abc' },
         requestId: 'req-1',
       },
     });

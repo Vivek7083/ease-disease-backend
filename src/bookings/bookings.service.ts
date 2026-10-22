@@ -5,6 +5,7 @@ import type { RequestOrigin } from '../common/http/request-origin.js';
 import { claimKey, hashRequest, saveResponse, type IdempotencyScope } from '../common/idempotency/idempotency.js';
 import type { VerifiedIdentity } from '../auth/identity-verifier.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import { canPay } from '../payments/payable.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from '../users/users.service.js';
 import { istDayStart, istNextDayStart } from './booking-day.js';
@@ -31,8 +32,9 @@ export interface BookingView {
   age: number;
   city: string;
   gender: string | null;
-  canPay: true;
+  canPay: boolean;
   payment: null;
+  createdAt: string;
 }
 
 export interface CreateBookingResponse {
@@ -100,8 +102,10 @@ export class BookingsService {
           age: input.age,
           city: input.city,
           gender: input.gender,
-          canPay: true,
+          // A new booking has no payment record yet.
+          canPay: canPay('PENDING_PAYMENT', null),
           payment: null,
+          createdAt: created.createdAt.toISOString(),
         },
       };
       await saveResponse(tx, scope, response);
@@ -147,9 +151,9 @@ export class BookingsService {
     pkg: { id: string; title: string; pricePaise: number },
     input: CreateBookingInput,
     origin: RequestOrigin,
-  ): Promise<{ reference: string; currency: string }> {
+  ): Promise<{ reference: string; currency: string; createdAt: Date }> {
     for (let attempt = 1; attempt <= REFERENCE_ATTEMPTS; attempt++) {
-      const rows = await tx.$queryRaw<{ reference: string; currency: string }[]>`
+      const rows = await tx.$queryRaw<{ reference: string; currency: string; created_at: Date }[]>`
         INSERT INTO bookings (
           id, reference, user_id, package_id, package_title, amount_paise,
           consultee_name, consultee_whatsapp_number, consultee_email, consultee_age, consultee_city, consultee_gender,
@@ -160,8 +164,9 @@ export class BookingsService {
           ${input.notes}::text, now(), ${origin.ip}::text, ${origin.userAgent}::text, now()
         )
         ON CONFLICT (reference) DO NOTHING
-        RETURNING reference, currency`;
-      if (rows[0]) return rows[0];
+        RETURNING reference, currency, created_at`;
+      const row = rows[0];
+      if (row) return { reference: row.reference, currency: row.currency, createdAt: row.created_at };
     }
     throw new Error(`Could not allocate a unique booking reference after ${REFERENCE_ATTEMPTS} attempts`);
   }

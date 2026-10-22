@@ -120,8 +120,6 @@ model Booking {
   /// Client address and User-Agent of the request that created the booking (chargeback evidence, filled from B3).
   createdIp               String?       @map("created_ip")
   createdUserAgent        String?       @map("created_user_agent")
-  /// Payment window only (no slot capacity in v1). Null once no longer relevant.
-  holdExpiresAt           DateTime?     @map("hold_expires_at") @db.Timestamptz(3)
   /// Unused for now: room for the admin dashboard (when the consult is scheduled / what the expert noted).
   scheduledAt             DateTime?     @map("scheduled_at") @db.Timestamptz(3)
   expertNotes             String?       @map("expert_notes")
@@ -136,6 +134,8 @@ model Booking {
 
   @@index([userId, status])
   @@index([userId, confirmedAt])
+  /// My Bookings: newest first for one person, paged by (created_at, id).
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
   @@map("bookings")
 }
 

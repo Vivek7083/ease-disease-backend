@@ -155,6 +155,7 @@ describe('POST /v1/bookings', () => {
           gender: 'Female',
           canPay: true,
           payment: null,
+          createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/),
         },
       });
       const row = await prisma.booking.findUniqueOrThrow({ where: { reference: res.body.booking.reference } });
