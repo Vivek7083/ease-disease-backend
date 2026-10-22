@@ -114,6 +114,9 @@ model Booking {
   consulteeDob            DateTime?     @map("consultee_dob") @db.Date
   notes                   String?
   consentAt               DateTime      @map("consent_at") @db.Timestamptz(3)
+  /// When the booking REACHED `CONFIRMED` (payment confirmed). Never cleared by a later status; null if it never reached it.
+  /// The daily cap counts this (India calendar day).
+  confirmedAt             DateTime?     @map("confirmed_at") @db.Timestamptz(3)
   /// Client address and User-Agent of the request that created the booking (chargeback evidence, filled from B3).
   createdIp               String?       @map("created_ip")
   createdUserAgent        String?       @map("created_user_agent")
@@ -132,6 +135,7 @@ model Booking {
   transaction Transaction?
 
   @@index([userId, status])
+  @@index([userId, confirmedAt])
   @@map("bookings")
 }
 

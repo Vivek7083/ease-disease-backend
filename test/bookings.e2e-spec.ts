@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { APP_CHECK_VERIFIER, AppCheckRejectedError } from '../src/auth/app-check-verifier.js';
 import { IDENTITY_VERIFIER, IdentityRejectedError, IdentityUnavailableError, type VerifiedIdentity } from '../src/auth/identity-verifier.js';
+import { istDayStart } from '../src/bookings/booking-day.js';
 import * as bookingReference from '../src/bookings/booking-reference.js';
 import { BookingsModule } from '../src/bookings/bookings.module.js';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter.js';
@@ -35,6 +36,8 @@ vi.mock('../src/bookings/booking-reference.js', async (importOriginal) => {
 const PACKAGE_ID = '00000000-0000-4000-8000-000000000001';
 const KEY_A = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
 const KEY_B = '0b9f8c1e-3d2a-4b6c-9e5f-7a1d2c3b4e5f';
+/** A form that passes every guard and fails validation. */
+const INVALID = { packageId: '00000000-0000-4000-8000-000000000001', age: 0 };
 
 const FORM = {
   packageId: PACKAGE_ID,
@@ -374,6 +377,31 @@ describe('POST /v1/bookings', () => {
     });
   });
 
+  describe('caps (the rules are covered in booking-caps.e2e-spec.ts; this is the HTTP answer)', () => {
+    const seedFor = async (status: 'PENDING_PAYMENT' | 'CONFIRMED', count: number, confirmedAt?: Date) => {
+      const user = await prisma.user.create({ data: { firebaseUid: IDENTITY.uid, email: 'priya@example.com', authProvider: 'google.com', lastAuthProvider: 'google.com' } });
+      for (let i = 0; i < count; i++) {
+        await prisma.booking.create({
+          data: { reference: `ED-C${String(i).padStart(5, '0')}`, userId: user.id, packageId: PACKAGE_ID, status, packageTitle: 'One-Time Consult', amountPaise: 249900, consulteeName: 'Priya Sharma', consulteeWhatsappNumber: '+919876543210', consulteeEmail: 'priya@example.com', consulteeAge: 34, consulteeCity: 'Bengaluru', consentAt: new Date(), confirmedAt },
+        });
+      }
+    };
+
+    it('5 unpaid bookings: 409 TOO_MANY_PENDING_BOOKINGS in the standard envelope, nothing stored', async () => {
+      await seedFor('PENDING_PAYMENT', 5);
+      const res = await post().expect(409);
+      expect(res.body.error).toEqual({ code: 'TOO_MANY_PENDING_BOOKINGS', message: expect.any(String), details: { limit: 5 }, requestId: expect.any(String) });
+      expect(await counts()).toEqual({ bookings: 5, keys: 0 });
+    });
+
+    it('5 bookings confirmed today: 409 DAILY_BOOKING_LIMIT in the standard envelope, nothing stored', async () => {
+      await seedFor('CONFIRMED', 5, new Date(istDayStart(new Date()).getTime() + 60_000));
+      const res = await post().expect(409);
+      expect(res.body.error).toEqual({ code: 'DAILY_BOOKING_LIMIT', message: expect.any(String), details: { limit: 5 }, requestId: expect.any(String) });
+      expect(await counts()).toEqual({ bookings: 5, keys: 0 });
+    });
+  });
+
   describe('Idempotency-Key', () => {
     it('the same key and the same body replay the original answer and create nothing', async () => {
       const first = await post().expect(201);
@@ -510,35 +538,38 @@ describe('POST /v1/bookings', () => {
       identityVerifier.willReturn(new IdentityRejectedError('expired'));
       for (let i = 0; i < 15; i++) await post().expect(401);
       identityVerifier.willReturn(IDENTITY);
-      for (let i = 0; i < BOOKING_CREATE_LIMIT_PER_HOUR; i++) await post(FORM, crypto.randomUUID()).expect(201);
+      for (let i = 0; i < BOOKING_CREATE_LIMIT_PER_HOUR; i++) await post(INVALID, crypto.randomUUID()).expect(400); // passes every guard
     });
   });
 
   describe('rate limit: 10 an hour per person', () => {
-    const fresh = () => post(FORM, crypto.randomUUID());
+    // Filler requests pass every guard but are refused by validation (400): they spend the hourly budget without piling
+    // up unpaid bookings, which the pending cap would refuse after 5.
+    const fresh = () => post(INVALID, crypto.randomUUID());
+    const real = () => post(FORM, crypto.randomUUID());
 
-    it('allows 10 and refuses the 11th with the standard 429 envelope and Retry-After, creating nothing', async () => {
-      for (let i = 0; i < 10; i++) await fresh().expect(201);
+    it('allows 10 and refuses the 11th with the standard 429 envelope and Retry-After, storing nothing', async () => {
+      for (let i = 0; i < 10; i++) await fresh().expect(400);
       const res = await fresh().expect(429);
       expect(res.body.error).toEqual({ code: 'RATE_LIMITED', message: 'Too many requests', details: { retryAfterSeconds: 3600 }, requestId: expect.any(String) });
       expect(res.headers['retry-after']).toBe('3600');
-      expect((await counts()).bookings).toBe(10);
+      expect((await counts()).bookings).toBe(0);
     });
 
     it('is per person: user B is unaffected by user A reaching the limit', async () => {
       as('uid-a');
-      for (let i = 0; i < 10; i++) await fresh().expect(201);
+      for (let i = 0; i < 10; i++) await fresh().expect(400);
       await fresh().expect(429);
       as('uid-b');
-      await fresh().expect(201);
+      await real().expect(201);
     });
 
     it('slides: the budget returns after the window, and Retry-After counts down', async () => {
-      for (let i = 0; i < 10; i++) await fresh().expect(201);
+      for (let i = 0; i < 10; i++) await fresh().expect(400);
       now += 600_000;
       expect((await fresh().expect(429)).headers['retry-after']).toBe('3000');
       now += 3_000_000;
-      await fresh().expect(201);
+      await real().expect(201);
     });
 
     it('a replay of an earlier request still spends one of the 10', async () => {

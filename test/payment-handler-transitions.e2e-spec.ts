@@ -525,4 +525,50 @@ describe('PaymentHandlerService: transitions (real Postgres, PayU faked)', () =>
     });
   });
 
+  describe('confirmed_at (the daily cap counts it)', () => {
+    it('is set when a payment confirms the booking, and stays null before', async () => {
+      await fixture();
+      expect((await state()).booking.confirmedAt).toBeNull();
+      await handle();
+      const { booking, tx } = await state();
+      expect(booking.confirmedAt).not.toBeNull();
+      expect(booking.confirmedAt!.getTime()).toBe(tx.completedAt!.getTime());
+    });
+
+    it('is not moved by a replay or by the webhook after the browser return', async () => {
+      await fixture();
+      await handle(signedPayload(), 'RETURN');
+      const first = (await state()).booking.confirmedAt;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      await handle(signedPayload(), 'WEBHOOK');
+      await handle(signedPayload(), 'WEBHOOK');
+      expect((await state()).booking.confirmedAt).toEqual(first);
+    });
+
+    it('is set when a late success revives a FAILED booking', async () => {
+      await fixture({ bookingStatus: 'FAILED' });
+      await handle();
+      expect((await state()).booking.confirmedAt).not.toBeNull();
+    });
+
+    it.each([
+      ['a failed payment', () => payuSays(found({ status: 'failure', rawStatus: 'failure' }))],
+      ['an amount mismatch', () => payuSays(found({ amountPaise: AMOUNT_PAISE + 100 }))],
+      ['a pending payment', () => payuSays(found({ status: 'pending', rawStatus: 'pending' }))],
+    ])('stays null after %s', async (_label, arrange) => {
+      await fixture();
+      arrange();
+      await handle();
+      expect((await state()).booking.confirmedAt).toBeNull();
+    });
+
+    it('stays null when a payment arrives for a closed (CANCELLED) booking: it goes to NEEDS_ATTENTION', async () => {
+      await fixture({ bookingStatus: 'CANCELLED' });
+      await handle();
+      const { booking } = await state();
+      expect(booking.status).toBe('NEEDS_ATTENTION');
+      expect(booking.confirmedAt).toBeNull();
+    });
+  });
+
 });

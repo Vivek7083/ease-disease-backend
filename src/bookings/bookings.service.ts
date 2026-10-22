@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
 import { AppException } from '../common/exceptions/app.exception.js';
 import type { RequestOrigin } from '../common/http/request-origin.js';
 import { claimKey, hashRequest, saveResponse, type IdempotencyScope } from '../common/idempotency/idempotency.js';
@@ -7,10 +7,16 @@ import type { VerifiedIdentity } from '../auth/identity-verifier.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from '../users/users.service.js';
+import { istDayStart, istNextDayStart } from './booking-day.js';
 import { REFERENCE_ATTEMPTS, generateBookingReference } from './booking-reference.js';
 import { parseCreateBooking, type CreateBookingInput } from './create-booking.js';
 
 export const CREATE_BOOKING_ENDPOINT = 'POST /v1/bookings';
+/** Injection token for the clock, so tests can say what time it is. */
+export const BOOKING_CLOCK = Symbol('BOOKING_CLOCK');
+/** api-flow.md section 4: at most 5 unpaid bookings, and at most 5 bookings confirmed per India calendar day, per person. */
+export const PENDING_BOOKING_LIMIT = 5;
+export const DAILY_CONFIRMED_LIMIT = 5;
 
 /** What the API returns about a booking right after it is created (api-flow.md section 4). */
 export interface BookingView {
@@ -44,6 +50,9 @@ export class BookingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
+    @Optional()
+    @Inject(BOOKING_CLOCK)
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   /**
@@ -75,6 +84,8 @@ export class BookingsService {
       if (!pkg) throw new AppException('PACKAGE_NOT_FOUND', 'Package not found', HttpStatus.NOT_FOUND);
       if (!pkg.isActive) throw new AppException('PACKAGE_NOT_ACTIVE', 'This package is not available for booking', HttpStatus.CONFLICT);
 
+      await this.enforceCaps(tx, user.id);
+
       const created = await this.insert(tx, user.id, pkg, input, origin);
       const response: CreateBookingResponse = {
         booking: {
@@ -96,6 +107,34 @@ export class BookingsService {
       await saveResponse(tx, scope, response);
       return { response, replayed: false };
     });
+  }
+
+  /**
+   * The two caps, checked under a per-person lock. The lock is what makes them hold when many requests arrive at once: no
+   * unique index can say "at most 5 rows", so without it ten simultaneous requests at 4 pending would all count 4 and all
+   * insert. It is released when the transaction ends; people never wait for each other. Pending is checked first.
+   * `NEEDS_ATTENTION` bookings count toward neither cap, and a booking that later became COMPLETED / CANCELLED / NO_SHOW
+   * still counts for the day it was confirmed (`confirmed_at` is never cleared).
+   */
+  private async enforceCaps(tx: Prisma.TransactionClient, userId: string): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+
+    const pending = await tx.booking.count({ where: { userId, status: 'PENDING_PAYMENT' } });
+    if (pending >= PENDING_BOOKING_LIMIT) {
+      throw new AppException('TOO_MANY_PENDING_BOOKINGS', 'You already have the maximum number of unpaid bookings', HttpStatus.CONFLICT, {
+        limit: PENDING_BOOKING_LIMIT,
+      });
+    }
+
+    const now = this.now();
+    const confirmedToday = await tx.booking.count({
+      where: { userId, confirmedAt: { gte: istDayStart(now), lt: istNextDayStart(now) } },
+    });
+    if (confirmedToday >= DAILY_CONFIRMED_LIMIT) {
+      throw new AppException('DAILY_BOOKING_LIMIT', 'You have reached the daily booking limit', HttpStatus.CONFLICT, {
+        limit: DAILY_CONFIRMED_LIMIT,
+      });
+    }
   }
 
   /**

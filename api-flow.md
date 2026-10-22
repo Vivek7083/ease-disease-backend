@@ -173,8 +173,8 @@ There is no slot endpoint: booking is package + assessment details, and the expe
   2. Field validation (trimmed first, all problems reported together in `details.fields`; unknown fields are refused; control characters, including NUL, are refused): `packageId` a uuid; `name` 2–100 chars; `whatsappNumber` entered with its country code, any country, stored as E.164 (`+` then 8–15 digits, no spaces); `email` lower-cased, at most 50 characters and in the form PayU accepts (it is sent to PayU and is part of the payment hash); `age` 1–119 (integer); `city` 2–100 chars; `gender` optional free text, 1–50 chars; `notes` optional, at most 1000 characters (line breaks allowed); `consent` must be `true`. The database enforces the limits on every field above except `name` and `consent` as a backstop.
   3. In one DB transaction, claim the `Idempotency-Key`: the same key and the same normalised body within 24 h returns the stored answer (`201`, header `Idempotent-Replayed: true`) and creates nothing; the same key with a different body is `409 IDEMPOTENCY_CONFLICT`. Only a successful answer is stored, so after a failure the same key may be used again.
   4. Package exists (`404 PACKAGE_NOT_FOUND`) and is active (`409 PACKAGE_NOT_ACTIVE`). This is the one read that supplies the price and title snapshot.
-  5. Caller has fewer than 5 bookings currently `PENDING_PAYMENT` (any age, no time window). *(Built in chunk B2.)*
-  6. Caller has fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day). *(Built in chunk B2.)*
+  5. Caller has fewer than 5 bookings currently `PENDING_PAYMENT` (any age, no time window). Checked under a per-person lock, so simultaneous requests cannot exceed it. `NEEDS_ATTENTION` bookings do not count.
+  6. Caller has fewer than 5 bookings that reached `CONFIRMED` today (IST calendar day, 00:00 to 24:00 India time). Counted from `bookings.confirmed_at`, the moment payment confirmed the booking; a booking later completed, cancelled or marked no-show still counts for the day it was confirmed. The caps apply when a booking is created only.
   7. Insert the booking and the stored answer in that same transaction: `amount_paise` from the package, `consent_at = now`, request IP and user-agent stored.
 - The two caps are independent of each other and both are counted per `userId` (the Firebase account, never the email string).
 - `profileComplete` is not required to create a booking.
@@ -190,8 +190,8 @@ There is no slot endpoint: booking is package + assessment details, and the expe
   - `404 PACKAGE_NOT_FOUND`
   - `409 PACKAGE_NOT_ACTIVE`: the package exists but is not on sale.
   - `400 VALIDATION_FAILED` (`details.fields`; also for a body that is not a readable JSON object)
-  - `409 TOO_MANY_PENDING_BOOKINGS`: 5 or more bookings already `PENDING_PAYMENT`.
-  - `409 DAILY_BOOKING_LIMIT`: 5 bookings already `CONFIRMED` today (IST).
+  - `409 TOO_MANY_PENDING_BOOKINGS`: 5 or more bookings already `PENDING_PAYMENT` (`details.limit` is 5).
+  - `409 DAILY_BOOKING_LIMIT`: 5 bookings already `CONFIRMED` today (IST) (`details.limit` is 5).
   - `409 IDEMPOTENCY_CONFLICT`
 
 **`GET /v1/bookings?status=active|past|all&limit=20&cursor=…`** 🔐. **This is My Bookings.**

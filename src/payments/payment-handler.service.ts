@@ -293,7 +293,7 @@ export class PaymentHandlerService {
 
       const confirmed = await tx.booking.updateMany({
         where: { id: transaction.booking.id, status: { in: CONFIRMABLE } },
-        data: { status: 'CONFIRMED', holdExpiresAt: null, updatedAt: now },
+        data: { status: 'CONFIRMED', confirmedAt: now, holdExpiresAt: null, updatedAt: now },
       });
       if (confirmed.count === 1) {
         const base = bookingFacts(transaction.booking);
