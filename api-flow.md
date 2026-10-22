@@ -304,10 +304,13 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | Endpoint group | Limit |
 |---|---|
 | Public GETs (`/packages`) | 60 / min / IP |
-| `/auth/sync`, `/me` | 30 / min / user |
+| Sign-in routes (`/auth/sync`, `/me`), in front of everything | 120 / min / IP (counts every request, including bad tokens) |
+| `/auth/sync`, `/me` | 30 / min / user, **one shared budget** for the two routes, keyed on the verified Firebase uid |
 | `POST /bookings` | 10 / hour / user (a request-rate guard, separate from the count caps) |
 | `/checkout` | 10 / hour / user |
 | PayU callback / webhook | 120 / min / IP (hash-authenticated) |
+
+A refused call answers `429` in the standard envelope with `details.retryAfterSeconds` and the HTTP header `Retry-After: <seconds>` (whole seconds, at least 1): `{ "error": { "code": "RATE_LIMITED", "message": "Too many requests", "details": { "retryAfterSeconds": 42 }, "requestId": "…" } }`. The window slides; refused calls are not counted, so waiting the advertised time always works. Requests refused by an earlier check (bad token, missing App Check) spend no person's budget. All limits are per server instance (several instances multiply the allowance); the edge limit for go-live is decided in S5.
 
 ## 8. Tables touched per endpoint
 

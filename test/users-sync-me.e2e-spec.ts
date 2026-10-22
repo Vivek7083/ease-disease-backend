@@ -6,6 +6,8 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { APP_CHECK_VERIFIER, AppCheckRejectedError, AppCheckUnavailableError } from '../src/auth/app-check-verifier.js';
 import { IDENTITY_VERIFIER, IdentityRejectedError, IdentityUnavailableError, type VerifiedIdentity } from '../src/auth/identity-verifier.js';
+import { IP_RATE_LIMITER, USER_RATE_LIMITER } from '../src/common/rate-limit/rate-limit.guards.js';
+import { SlidingWindowLimiter } from '../src/common/rate-limit/sliding-window-limiter.js';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter.js';
 import { RequestIdMiddleware } from '../src/common/middleware/request-id.middleware.js';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
@@ -43,6 +45,11 @@ describe('POST /v1/auth/sync and GET /v1/me', () => {
       .useValue(identityVerifier)
       .overrideProvider(APP_CHECK_VERIFIER)
       .useValue(appCheckVerifier)
+      // This file tests what the routes DO; the limits have their own file (users-rate-limit.e2e-spec.ts).
+      .overrideProvider(IP_RATE_LIMITER)
+      .useValue(new SlidingWindowLimiter(1_000_000, 60_000))
+      .overrideProvider(USER_RATE_LIMITER)
+      .useValue(new SlidingWindowLimiter(1_000_000, 60_000))
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     const requestId = new RequestIdMiddleware();
