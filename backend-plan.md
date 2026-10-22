@@ -98,7 +98,7 @@ Conventions: UUID PKs · `timestamptz` (UTC, shown in IST) · money in **paise**
 
 | Table | Key columns |
 |---|---|
-| **users** | id, **firebase_uid (unique)**, name, email, phone (E.164), dob?, auth_provider, last_login_at |
+| **users** | id, **firebase_uid (unique)**, name, email, phone (E.164), dob?, auth_provider (first sign-up method), last_auth_provider (latest), last_login_at |
 | **packages** | id, slug, title, description, price_paise, currency, duration_minutes, **is_active**, sort_order |
 | **bookings** | id, reference (`ED-7K3QXM`, unique), user_id, package_id, status, **amount_paise (snapshot)**, **consultee_name, consultee_whatsapp_number (E.164), consultee_email (lower-case, max 50), consultee_age, consultee_city**, consultee_gender? (free text), consultee_dob? (unused), notes?, consent_at, created_ip?, created_user_agent?. `hold_expires_at` exists but is unused. "Consultee" = the person the consultation is for; it may differ from the account (`users`) |
 | **transactions** | id, **order_id (= PayU txnid, unique)**, booking_id (unique: one transaction per booking), user_id, gateway, amount_paise, currency, status, payment_mode, **pg_txn_id (mihpayid)**, bank_ref_num, error_code, error_message, completed_at, created_ip?, created_user_agent? |

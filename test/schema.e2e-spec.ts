@@ -23,7 +23,7 @@ describe('PayU spike schema (real Postgres)', () => {
   });
 
   const makeUser = () =>
-    prisma.user.create({ data: { firebaseUid: `fb_${randomUUID()}`, email: 'p@example.com', authProvider: 'google.com' } });
+    prisma.user.create({ data: { firebaseUid: `fb_${randomUUID()}`, email: 'p@example.com', authProvider: 'google.com', lastAuthProvider: 'google.com' } });
   const makePackage = () =>
     prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 150000 } });
   const bookingData = (userId: string, packageId: string, reference = 'ED-AAAAAA') => ({

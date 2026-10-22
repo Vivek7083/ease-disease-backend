@@ -126,15 +126,15 @@ sequenceDiagram
 - Server:
   1. Verify the ID token.
   2. Require `email_verified = true`.
-  3. Upsert the user by `firebase_uid`: email, display name (if empty), `auth_provider` (`google.com` | `emailLink`), `last_login_at`. `name` is only written from the token when the stored value is empty (an edited name is never overwritten). `email` is lower-cased on write.
+  3. Upsert the user by `firebase_uid` in one atomic statement: email (follows the verified token, lower-cased and trimmed), display name (only when the stored one is empty), `last_auth_provider` (`google.com` | `emailLink`, updated on every sync) and `last_login_at`. `auth_provider` is set once, at creation, and records how the person first signed up. A sign-in method other than Google or email link is refused and nothing is written. `name` is never overwritten once set (an edited name is safe); a token name is cleaned (control characters removed, at most 100 characters).
 - `200`:
 ```json
-{ "user": { "id": "7b1e…", "email": "priya@example.com", "name": "Priya Sharma", "phone": null, "dob": null, "authProvider": "google.com" },
+{ "user": { "id": "7b1e…", "email": "priya@example.com", "name": "Priya Sharma", "phone": null, "dob": null, "authProvider": "google.com", "lastAuthProvider": "google.com" },
   "profileComplete": false }
 ```
-- Errors: `401 UNAUTHENTICATED`, `403 EMAIL_NOT_VERIFIED`, `403 APP_CHECK_FAILED`.
+- Errors: `401 UNAUTHENTICATED`, `403 EMAIL_NOT_VERIFIED`, `403 APP_CHECK_FAILED`, `403 UNSUPPORTED_SIGN_IN_PROVIDER`, `400 INVALID_EMAIL` (token email not plain ASCII or not 3-254 characters), `503 AUTH_UNAVAILABLE`, `503 APP_CHECK_UNAVAILABLE`. Responses carry `Cache-Control: no-store`.
 
-**`GET /v1/me`** 🔐 → `200 { user, profileComplete }`. If the token is valid but the user row is missing, it is created (same as sync).
+**`GET /v1/me`** 🔐 (no App Check) → `200 { user, profileComplete }`. Read-only: it changes nothing for an existing user (not even `last_login_at`). If the token is valid but the user row is missing, it is created as sync would create it, with the same refusals.
 
 **`PATCH /v1/me`** 🔐
 ```json
@@ -286,6 +286,8 @@ Transaction:  CREATED ──► INITIATED ──► SUCCESS
 | 401 | `UNAUTHENTICATED` | Missing, malformed, expired, forged or revoked ID token, or sign-in not configured. **One identical body for every cause** (the reason is only in the server log) |
 | 403 | `EMAIL_NOT_VERIFIED` | Valid token whose email is missing or not verified. Enforced on every authenticated endpoint, only after the token itself is proven |
 | 403 | `APP_CHECK_FAILED` | Missing or invalid App Check token |
+| 403 | `UNSUPPORTED_SIGN_IN_PROVIDER` | Valid token, but signed in with a method we do not offer (only Google and email link). Nothing is created |
+| 400 | `INVALID_EMAIL` | The verified email cannot be stored (not plain ASCII, or not 3-254 characters) |
 | 404 | `PACKAGE_NOT_FOUND` / `BOOKING_NOT_FOUND` | Unknown, inactive or not owned |
 | 409 | `TOO_MANY_PENDING_BOOKINGS` | 5 or more bookings already `PENDING_PAYMENT` |
 | 409 | `DAILY_BOOKING_LIMIT` | 5 bookings already `CONFIRMED` today (IST) |

@@ -22,7 +22,7 @@ describe('payment events integrity and booking/transaction rules (real Postgres)
 
   const makeBooking = async (reference = 'ED-AAAAAA') => {
     const user = await prisma.user.create({
-      data: { firebaseUid: `fb_${randomUUID()}`, email: 'p@example.com', authProvider: 'google.com' },
+      data: { firebaseUid: `fb_${randomUUID()}`, email: 'p@example.com', authProvider: 'google.com', lastAuthProvider: 'google.com' },
     });
     const pkg = await prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 249900 } });
     return prisma.booking.create({

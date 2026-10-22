@@ -27,7 +27,10 @@ model User {
   email        String
   phone        String?
   dob          DateTime? @db.Date
-  authProvider String    @map("auth_provider")
+  /// How the person FIRST signed up (`google.com` | `emailLink`). Set when the row is created and never rewritten.
+  authProvider     String    @map("auth_provider")
+  /// How they signed in most recently. Set at creation and updated by POST /v1/auth/sync only.
+  lastAuthProvider String    @map("last_auth_provider")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)

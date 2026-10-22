@@ -89,7 +89,7 @@ export async function createBookingFixture(prisma: PrismaClient, options: Bookin
   } = options;
 
   const user = await prisma.user.create({
-    data: { firebaseUid: `fb_${randomUUID()}`, email: userEmail, name: userName, phone: userPhone, authProvider: 'google.com' },
+    data: { firebaseUid: `fb_${randomUUID()}`, email: userEmail, name: userName, phone: userPhone, authProvider: 'google.com', lastAuthProvider: 'google.com' },
   });
   const pkg = await prisma.package.create({
     data: { title: packageTitle, description: ['3-week plan.'], pricePaise: amountPaise },

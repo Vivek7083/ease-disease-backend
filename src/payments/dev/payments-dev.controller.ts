@@ -126,6 +126,7 @@ export class PaymentsDevController {
         name,
         phone,
         authProvider: 'google.com',
+        lastAuthProvider: 'google.com',
       },
     });
 
