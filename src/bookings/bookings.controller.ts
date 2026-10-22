@@ -1,10 +1,11 @@
-import { Body, Controller, Header, Headers, HttpCode, HttpStatus, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Header, Headers, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiCreatedResponse, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { AppCheckGuard } from '../auth/app-check.guard.js';
 import { CurrentIdentity } from '../auth/current-identity.decorator.js';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard.js';
 import type { VerifiedIdentity } from '../auth/identity-verifier.js';
+import { requestOrigin } from '../common/http/request-origin.js';
 import { IDEMPOTENCY_HEADER, parseIdempotencyKey } from '../common/idempotency/idempotency.js';
 import { BookingCreateRateLimitGuard, IpRateLimitGuard } from '../common/rate-limit/rate-limit.guards.js';
 import { ErrorEnvelopeDto } from '../users/users.dto.js';
@@ -56,10 +57,11 @@ export class BookingsController {
     @CurrentIdentity() identity: VerifiedIdentity,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Body() body: unknown,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<CreateBookingResponse> {
     const key = parseIdempotencyKey(idempotencyKey);
-    const { response, replayed } = await this.bookings.create(identity, key, body);
+    const { response, replayed } = await this.bookings.create(identity, key, body, requestOrigin(req));
     if (replayed) res.setHeader(REPLAYED_HEADER, 'true');
     return response;
   }

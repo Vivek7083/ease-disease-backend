@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { AppException } from '../common/exceptions/app.exception.js';
+import type { RequestOrigin } from '../common/http/request-origin.js';
 import { claimKey, hashRequest, saveResponse, type IdempotencyScope } from '../common/idempotency/idempotency.js';
 import type { VerifiedIdentity } from '../auth/identity-verifier.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -49,9 +50,10 @@ export class BookingsService {
    * `POST /v1/bookings`. Order: the form is checked first (cheap, no database), then the person is resolved, then ONE
    * transaction does everything else: claim the Idempotency-Key (or replay the original answer), read the package once
    * (its price and title are the snapshot; nothing price-like ever comes from the caller), insert the booking, and store
-   * the answer on the key. The booking and its key row commit together or not at all.
+   * the answer on the key. The booking and its key row commit together or not at all. The sender's address and user-agent are
+   * stored on the booking as chargeback evidence (not part of the idempotency hash, never returned).
    */
-  async create(identity: VerifiedIdentity, idempotencyKey: string, body: unknown): Promise<CreateBookingResult> {
+  async create(identity: VerifiedIdentity, idempotencyKey: string, body: unknown, origin: RequestOrigin): Promise<CreateBookingResult> {
     const parsed = parseCreateBooking(body);
     if (!parsed.ok) {
       throw new AppException('VALIDATION_FAILED', 'Some fields need attention', HttpStatus.BAD_REQUEST, { fields: parsed.fields });
@@ -73,7 +75,7 @@ export class BookingsService {
       if (!pkg) throw new AppException('PACKAGE_NOT_FOUND', 'Package not found', HttpStatus.NOT_FOUND);
       if (!pkg.isActive) throw new AppException('PACKAGE_NOT_ACTIVE', 'This package is not available for booking', HttpStatus.CONFLICT);
 
-      const created = await this.insert(tx, user.id, pkg, input);
+      const created = await this.insert(tx, user.id, pkg, input, origin);
       const response: CreateBookingResponse = {
         booking: {
           reference: created.reference,
@@ -105,17 +107,18 @@ export class BookingsService {
     userId: string,
     pkg: { id: string; title: string; pricePaise: number },
     input: CreateBookingInput,
+    origin: RequestOrigin,
   ): Promise<{ reference: string; currency: string }> {
     for (let attempt = 1; attempt <= REFERENCE_ATTEMPTS; attempt++) {
       const rows = await tx.$queryRaw<{ reference: string; currency: string }[]>`
         INSERT INTO bookings (
           id, reference, user_id, package_id, package_title, amount_paise,
           consultee_name, consultee_whatsapp_number, consultee_email, consultee_age, consultee_city, consultee_gender,
-          notes, consent_at, updated_at
+          notes, consent_at, created_ip, created_user_agent, updated_at
         ) VALUES (
           ${randomUUID()}::uuid, ${generateBookingReference()}, ${userId}::uuid, ${pkg.id}::uuid, ${pkg.title}, ${pkg.pricePaise},
           ${input.name}, ${input.whatsappNumber}, ${input.email}, ${input.age}, ${input.city}, ${input.gender}::text,
-          ${input.notes}::text, now(), now()
+          ${input.notes}::text, now(), ${origin.ip}::text, ${origin.userAgent}::text, now()
         )
         ON CONFLICT (reference) DO NOTHING
         RETURNING reference, currency`;

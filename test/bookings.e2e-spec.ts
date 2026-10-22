@@ -61,7 +61,7 @@ describe('POST /v1/bookings', () => {
   const generator = vi.mocked(bookingReference.generateBookingReference);
   const realGenerator = generator.getMockImplementation()!;
 
-  async function createApp() {
+  async function createApp(trustProxyHops = 0) {
     await app?.close();
     const values: Record<string, unknown> = { NODE_ENV: 'development', FIREBASE_PROJECT_ID: 'easedisease-test', APP_CHECK_MODE: 'enforce' };
     @Global()
@@ -85,7 +85,7 @@ describe('POST /v1/bookings', () => {
       .useValue(new SlidingWindowLimiter(BOOKING_CREATE_LIMIT_PER_HOUR, BOOKING_CREATE_WINDOW_MS, () => now))
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
-    configureTrustProxy(app, 0);
+    configureTrustProxy(app, trustProxyHops);
     const requestId = new RequestIdMiddleware();
     app.use((req: never, res: never, next: never) => requestId.use(req, res, next));
     app.useGlobalFilters(new AllExceptionsFilter());
@@ -168,7 +168,7 @@ describe('POST /v1/bookings', () => {
         consulteeCity: 'Bengaluru',
         consulteeGender: 'Female',
         notes: 'Bloating after meals',
-        createdIp: null,
+        createdIp: '127.0.0.1',
         createdUserAgent: null,
       });
       expect(Math.abs(row.consentAt.getTime() - Date.now())).toBeLessThan(60_000);
@@ -245,6 +245,44 @@ describe('POST /v1/bookings', () => {
       expect(await counts()).toEqual({ bookings: 1, keys: 1 });
       generator.mockImplementation(realGenerator);
       await post(FORM, KEY_A).expect(201);
+    });
+  });
+
+  describe('request origin (chargeback evidence)', () => {
+    const stored = async () => prisma.booking.findFirstOrThrow({ select: { createdIp: true, createdUserAgent: true } });
+
+    it('stores the sender address and user-agent on the booking', async () => {
+      await post().set('User-Agent', 'EaseTest/1.0 (unit)').expect(201);
+      expect(await stored()).toEqual({ createdIp: '127.0.0.1', createdUserAgent: 'EaseTest/1.0 (unit)' });
+    });
+
+    it('ignores a forged X-Forwarded-For when no proxy is trusted', async () => {
+      await post().set('X-Forwarded-For', '198.51.100.9').expect(201);
+      expect((await stored()).createdIp).toBe('127.0.0.1');
+    });
+
+    it('uses the forwarded address only when one proxy hop is trusted, and only its last entry', async () => {
+      await createApp(1);
+      await post().set('X-Forwarded-For', '6.6.6.6, 198.51.100.9').expect(201);
+      expect((await stored()).createdIp).toBe('198.51.100.9');
+    });
+
+    it('cuts a very long user-agent at 512 characters', async () => {
+      await post().set('User-Agent', 'u'.repeat(900)).expect(201);
+      expect((await stored()).createdUserAgent).toBe('u'.repeat(512));
+    });
+
+    it('a missing user-agent is stored as null', async () => {
+      await post().unset('User-Agent').expect(201);
+      expect((await stored()).createdUserAgent).toBeNull();
+    });
+
+    it('is never in any response, and a replay keeps the first values', async () => {
+      const first = await post().set('User-Agent', 'First/1').expect(201);
+      const second = await post().set('User-Agent', 'Second/2').expect(201);
+      expect(second.headers['idempotent-replayed']).toBe('true');
+      expect(JSON.stringify([first.body, second.body])).not.toMatch(/127\.0\.0\.1|First\/1|Second\/2/);
+      expect((await stored()).createdUserAgent).toBe('First/1');
     });
   });
 
