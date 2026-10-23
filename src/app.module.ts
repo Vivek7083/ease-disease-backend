@@ -5,12 +5,13 @@ import { ConfigModule } from './config/config.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { HealthModule } from './health/health.module.js';
 import { InternalModule } from './internal/internal.module.js';
+import { PackagesModule } from './packages/packages.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
 import { UsersModule } from './users/users.module.js';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware.js';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, AuthModule, HealthModule, PaymentsModule, InternalModule, UsersModule, BookingsModule],
+  imports: [ConfigModule, PrismaModule, AuthModule, HealthModule, PaymentsModule, InternalModule, UsersModule, BookingsModule, PackagesModule],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {

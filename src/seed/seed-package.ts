@@ -9,6 +9,9 @@ export const SEED_PACKAGE = {
   description: ['3-week plan.', 'Understand your underlying root cause.'],
   /** ₹2,499, as set by the owner on 2026-10-17. Seeding never overwrites an existing row's price. */
   pricePaise: 249900,
+  /** The struck-through figure the site shows next to the price. */
+  originalPricePaise: 500000,
+  durationMinutes: 30,
   isActive: true,
 } as const;
 

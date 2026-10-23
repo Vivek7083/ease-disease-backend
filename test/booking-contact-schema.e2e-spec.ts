@@ -25,7 +25,7 @@ describe('booking contact columns and request-origin columns (real Postgres)', (
   const makeUserAndPackage = async () => {
     const [user, pkg] = await Promise.all([
       prisma.user.create({ data: { firebaseUid: `fb_${randomUUID()}`, email: 'p@example.com', authProvider: 'google.com', lastAuthProvider: 'google.com' } }),
-      prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 150000 } }),
+      prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 150000, durationMinutes: 30 } }),
     ]);
     return { user, pkg };
   };

@@ -15,6 +15,8 @@ export const CHECKOUT_RATE_LIMITER = Symbol('CHECKOUT_RATE_LIMITER');
 /** Reading bookings (list, detail) has its own, larger buckets: the payment status page polls every 2 seconds. */
 export const READ_RATE_LIMITER = Symbol('READ_RATE_LIMITER');
 export const READ_IP_RATE_LIMITER = Symbol('READ_IP_RATE_LIMITER');
+/** Public reads (the package list) need no login, so only an address budget applies, separate from everything else. */
+export const PUBLIC_READ_RATE_LIMITER = Symbol('PUBLIC_READ_RATE_LIMITER');
 
 /** api-flow.md section 7: `/auth/sync` and `/me` share 30 / minute / person; 120 / minute / IP sits in front of everything. */
 export const USER_LIMIT_PER_MINUTE = 30;
@@ -29,6 +31,8 @@ export const CHECKOUT_WINDOW_MS = 3_600_000;
 /** api-flow.md section 7: reading bookings allows 120 / minute / person and 600 / minute / address. */
 export const READ_LIMIT_PER_MINUTE = 120;
 export const READ_IP_LIMIT_PER_MINUTE = 600;
+/** api-flow.md section 7: public GETs allow 60 / minute / address. */
+export const PUBLIC_READ_LIMIT_PER_MINUTE = 60;
 
 /** Answers 429 in the standard envelope, with `Retry-After` (whole seconds, at least 1) on the response. */
 function refuse(response: Response, decision: LimitDecision): never {
@@ -71,6 +75,14 @@ export class IpRateLimitGuard extends PerAddressRateLimitGuard {
 @Injectable()
 export class ReadIpRateLimitGuard extends PerAddressRateLimitGuard {
   constructor(@Inject(READ_IP_RATE_LIMITER) limiter: SlidingWindowLimiter) {
+    super(limiter);
+  }
+}
+
+/** Public GETs such as `/v1/packages`: 60 / minute / address, its own bucket. */
+@Injectable()
+export class PublicReadRateLimitGuard extends PerAddressRateLimitGuard {
+  constructor(@Inject(PUBLIC_READ_RATE_LIMITER) limiter: SlidingWindowLimiter) {
     super(limiter);
   }
 }

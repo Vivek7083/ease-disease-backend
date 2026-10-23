@@ -25,7 +25,7 @@ describe('PayU spike schema (real Postgres)', () => {
   const makeUser = () =>
     prisma.user.create({ data: { firebaseUid: `fb_${randomUUID()}`, email: 'p@example.com', authProvider: 'google.com', lastAuthProvider: 'google.com' } });
   const makePackage = () =>
-    prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 150000 } });
+    prisma.package.create({ data: { title: 'Pkg', description: ['a'], pricePaise: 150000, durationMinutes: 30 } });
   const bookingData = (userId: string, packageId: string, reference = 'ED-AAAAAA') => ({
     reference,
     userId,
@@ -86,13 +86,30 @@ describe('PayU spike schema (real Postgres)', () => {
   describe('CHECK constraints', () => {
     it('rejects negative amounts and prices', async () => {
       const booking = await makeBooking();
-      await expect(prisma.package.create({ data: { title: 'x', description: [], pricePaise: -1 } })).rejects.toThrow();
+      await expect(prisma.package.create({ data: { title: 'x', description: [], pricePaise: -1, durationMinutes: 30 } })).rejects.toThrow();
       await expect(
         prisma.booking.create({ data: { ...bookingData(booking.userId, booking.packageId, 'ED-NEG001'), amountPaise: -1 } }),
       ).rejects.toThrow();
       await expect(
         prisma.transaction.create({ data: { ...transactionData(booking.id, booking.userId), amountPaise: -1 } }),
       ).rejects.toThrow();
+    });
+
+    it.each([0, -5, 601])('rejects a duration of %s minutes', async (durationMinutes) => {
+      await expect(prisma.package.create({ data: { title: 'x', description: [], pricePaise: 1, durationMinutes } })).rejects.toThrow();
+    });
+
+    it.each([[100, 100], [99, 100], [0, 100]])('rejects an old price of %s paise when the price is %s', async (originalPricePaise, pricePaise) => {
+      await expect(prisma.package.create({ data: { title: 'x', description: [], pricePaise, originalPricePaise, durationMinutes: 30 } })).rejects.toThrow();
+    });
+
+    it('accepts no old price, or one higher than the price', async () => {
+      await expect(prisma.package.create({ data: { title: 'x', description: [], pricePaise: 100, durationMinutes: 30 } })).resolves.toMatchObject({ originalPricePaise: null });
+      await expect(prisma.package.create({ data: { title: 'y', description: [], pricePaise: 100, originalPricePaise: 101, durationMinutes: 30 } })).resolves.toBeDefined();
+    });
+
+    it.each([1, 600])('accepts a duration of %s minutes', async (durationMinutes) => {
+      await expect(prisma.package.create({ data: { title: 'x', description: [], pricePaise: 1, durationMinutes } })).resolves.toBeDefined();
     });
 
     it('accepts zero amounts', async () => {
@@ -105,12 +122,12 @@ describe('PayU spike schema (real Postgres)', () => {
       ['a string', 'point'],
       ['a number', 5],
     ])('rejects a package description that is %s (must be an array)', async (_name, description) => {
-      await expect(prisma.package.create({ data: { title: 'x', description, pricePaise: 1 } })).rejects.toThrow();
+      await expect(prisma.package.create({ data: { title: 'x', description, pricePaise: 1, durationMinutes: 30 } })).rejects.toThrow();
     });
 
     it('accepts an empty array and an array of strings, and returns it unchanged', async () => {
-      const empty = await prisma.package.create({ data: { title: 'e', description: [], pricePaise: 1 } });
-      const points = await prisma.package.create({ data: { title: 'p', description: ['one', 'two'], pricePaise: 1 } });
+      const empty = await prisma.package.create({ data: { title: 'e', description: [], pricePaise: 1, durationMinutes: 30 } });
+      const points = await prisma.package.create({ data: { title: 'p', description: ['one', 'two'], pricePaise: 1, durationMinutes: 30 } });
       expect(empty.description).toEqual([]);
       expect(points.description).toEqual(['one', 'two']);
     });

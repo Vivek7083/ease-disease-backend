@@ -148,11 +148,15 @@ sequenceDiagram
 
 ### Catalog
 
-**`GET /v1/packages`** 🌐. Active packages only; `Cache-Control: public, max-age=300`.
+**`GET /v1/packages`** 🌐 (built). Active packages only, cheapest first then oldest first (empty list when nothing is on sale); `Cache-Control: public, max-age=300`; 60 / minute / address (`429 RATE_LIMITED`). No `slug` (the app books by `id`); `pricePaise` is the current price (what is charged) and `originalPricePaise` is the optional old price to show struck through (`null` = none; always higher than `pricePaise` when set); `description` is the list of bullet points as stored; `currency` is always `INR`; `isActive` and timestamps are never returned.
 ```json
-{ "packages": [ { "id": "pkg_…", "slug": "one-time-consult", "title": "One-Time Consult", "description": "…",
-                  "pricePaise": 150000, "currency": "INR", "durationMinutes": 30 } ] }
+{ "packages": [ { "id": "00000000-0000-4000-8000-000000000001", "title": "One-Time Consult",
+                  "description": ["3-week plan.", "Understand your underlying root cause."],
+                  "pricePaise": 249900, "originalPricePaise": 500000,
+                  "currency": "INR", "durationMinutes": 30 } ] }
 ```
+
+**CORS** (built). The API answers browsers only from `FRONTEND_BASE_URL` plus the optional `CORS_EXTRA_ORIGINS`; `http://localhost:4200` and `http://127.0.0.1:4200` are also allowed when `NODE_ENV=development`. Methods `GET, POST, OPTIONS`; request headers `Authorization, Content-Type, Idempotency-Key, X-Firebase-AppCheck`; readable response headers `Retry-After, Idempotent-Replayed, X-Request-Id`; no cookies; never `*`.
 
 There is no slot endpoint: booking is package + assessment details, and the experts contact the patient after payment (`GET /v1/slots` was removed 2026-10-21).
 

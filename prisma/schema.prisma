@@ -76,6 +76,10 @@ model Package {
   /// JSON array of strings: bullet points the frontend shows as-is.
   description Json     @db.JsonB
   pricePaise  Int      @map("price_paise")
+  /// Optional "old price" shown struck through; null = none. When set it is higher than pricePaise (database check).
+  originalPricePaise Int?  @map("original_price_paise")
+  /// Length of the consultation, 1 to 600 (database check).
+  durationMinutes Int  @map("duration_minutes") @db.SmallInt
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

@@ -32,7 +32,7 @@ describe('booking caps (real Postgres)', () => {
     await truncateAll(prisma);
     clock = NOON_IST;
     sequence = 0;
-    packageId = (await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: 249900 } })).id;
+    packageId = (await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: 249900, durationMinutes: 30 } })).id;
   });
 
   const service = () => new BookingsService(prisma as never, new UsersService(prisma as never), () => clock);

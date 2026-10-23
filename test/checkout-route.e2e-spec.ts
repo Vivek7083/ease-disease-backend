@@ -187,7 +187,7 @@ describe('POST /v1/bookings/{reference}/checkout', () => {
     });
 
     it('a booking made through POST /v1/bookings is paid for end to end, and a PayU success confirms it', async () => {
-      const pkg = await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: 249900 } });
+      const pkg = await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: 249900, durationMinutes: 30 } });
       const created = await request(app.getHttpServer())
         .post('/v1/bookings')
         .set('X-Firebase-AppCheck', SHAPED_APP_CHECK_TOKEN)

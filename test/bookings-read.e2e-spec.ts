@@ -97,7 +97,7 @@ describe('GET /v1/bookings and GET /v1/bookings/{reference}', () => {
     await truncateAll(prisma);
     now = 1_000_000_000;
     sequence = 0;
-    packageId = (await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: AMOUNT_PAISE } })).id;
+    packageId = (await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: AMOUNT_PAISE, durationMinutes: 30 } })).id;
     identityVerifier.calls.length = 0;
     identityVerifier.willReturn(IDENTITY);
     appCheckVerifier.calls.length = 0;

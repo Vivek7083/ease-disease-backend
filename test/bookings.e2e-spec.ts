@@ -108,7 +108,7 @@ describe('POST /v1/bookings', () => {
   const logSpies: ReturnType<typeof vi.spyOn>[] = [];
   beforeEach(async () => {
     await truncateAll(prisma);
-    await prisma.package.create({ data: { id: PACKAGE_ID, title: 'One-Time Consult', description: ['3-week plan.'], pricePaise: 249900 } });
+    await prisma.package.create({ data: { id: PACKAGE_ID, title: 'One-Time Consult', description: ['3-week plan.'], pricePaise: 249900, durationMinutes: 30 } });
     now = 1_000_000_000;
     identityVerifier.calls.length = 0;
     identityVerifier.willReturn(IDENTITY);

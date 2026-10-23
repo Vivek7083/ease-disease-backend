@@ -273,7 +273,7 @@ describe('CheckoutService (real Postgres)', () => {
 
     it('a booking made through the real create-booking code can be paid for', async () => {
       const identity = { uid: 'uid-e2e', email: 'owner@example.com', emailVerified: true, name: undefined, signInProvider: 'google.com' };
-      const pkg = await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: AMOUNT_PAISE } });
+      const pkg = await prisma.package.create({ data: { title: 'One-Time Consult', description: ['x'], pricePaise: AMOUNT_PAISE, durationMinutes: 30 } });
       const bookings = new BookingsService(prisma as never, new UsersService(prisma as never));
       const { response } = await bookings.create(identity, crypto.randomUUID(), {
         packageId: pkg.id,
