@@ -55,6 +55,18 @@ export const envSchema = z
     /** Where PayU's browser callback sends the user. An origin only; the path is always ours. */
     FRONTEND_BASE_URL: originUrl().optional(),
     /**
+     * Extra browser origins allowed to call this API (comma separated, e.g. a preview site), on top of FRONTEND_BASE_URL.
+     * Each must be an origin only; outside development each must be https.
+     */
+    CORS_EXTRA_ORIGINS: z.preprocess(
+      blankToUndefined,
+      z
+        .string()
+        .transform((value) => value.split(',').map((part) => part.trim()).filter((part) => part !== ''))
+        .pipe(z.array(originUrl()))
+        .optional(),
+    ),
+    /**
      * Public address of THIS API, used for the success/failure/cancel URLs PayU sends the browser back to.
      * PayU's hosted-checkout docs require a public https URL, so outside development it must be https.
      */
@@ -102,6 +114,13 @@ export const envSchema = z
           ctx.addIssue({ code: 'custom', path: [name], message: `${name} is required when NODE_ENV is ${env.NODE_ENV}` });
         } else if (!env[name].startsWith('https://')) {
           ctx.addIssue({ code: 'custom', path: [name], message: `${name} must use https outside development` });
+        }
+      }
+    }
+    if (env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') {
+      for (const origin of env.CORS_EXTRA_ORIGINS ?? []) {
+        if (!origin.startsWith('https://')) {
+          ctx.addIssue({ code: 'custom', path: ['CORS_EXTRA_ORIGINS'], message: `CORS_EXTRA_ORIGINS must use https outside development (${origin})` });
         }
       }
     }
