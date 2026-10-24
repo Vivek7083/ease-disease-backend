@@ -5,7 +5,7 @@
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows must not rewrite /app style paths
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 2
 PG_CONTAINER="${PG_CONTAINER:-ease-disease-backend-postgres-1}"
 DB="smoke_$(date +%s)"
 API_IMAGE="ease-disease-api:smoke"

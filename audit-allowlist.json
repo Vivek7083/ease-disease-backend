@@ -1,0 +1,7 @@
+[
+  {
+    "id": "GHSA-q7qp-rjg7-q26m",
+    "reason": "multer (denial of service in a pending fileFilter) ships inside @nestjs/platform-express, but this API has no file-upload route and uses no multer API (checked in src/ on 2026-10-24); no fixed release exists upstream. Re-check when @nestjs/platform-express updates.",
+    "expires": "2026-12-01"
+  }
+]

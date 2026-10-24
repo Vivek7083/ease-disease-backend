@@ -1,0 +1,17 @@
+# Secret scan settings (gitleaks). The default rules stay on; only the two known false positives below are allowed.
+title = "ease-disease-backend"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Random-looking uuid idempotency keys used as test data (never real credentials)"
+condition = "AND"
+paths = ['''^test/''', '''\.spec\.ts$''']
+regexes = ['''[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}''']
+
+[[allowlists]]
+description = "Placeholder token in the NestJS starter README badge link"
+condition = "AND"
+paths = ['''^README\.md$''']
+regexes = ['''abc123def456''']
