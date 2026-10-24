@@ -10,6 +10,9 @@ import type { Env } from './config/env.schema.js';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Cloud Run stops a container with SIGTERM: without this a Node process running as PID 1 would ignore it and be killed
+  // after the grace period; with it, in-flight requests finish and the database pool closes.
+  app.enableShutdownHooks();
   app.useGlobalFilters(new AllExceptionsFilter());
 
   const configService = app.get(ConfigService<Env, true>);

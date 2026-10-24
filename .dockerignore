@@ -1,0 +1,23 @@
+# Nothing secret, local or heavy may enter the build context.
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.vscode
+.idea
+node_modules
+dist
+coverage
+docs
+test
+scripts
+*.md
+*.log
+*.tsbuildinfo
+docker-compose.yml
+Dockerfile
+.dockerignore
+service-account*.json
+*.pem
+*.key
