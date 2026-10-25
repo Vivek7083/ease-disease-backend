@@ -39,6 +39,7 @@ docker build -q --target migrate -t "$MIGRATE_IMAGE" . >/dev/null && pass "migra
 echo "== image contents =="
 check "runs as a non-root user" test "$(docker run --rm --entrypoint id "$API_IMAGE" -u)" != "0"
 check "no .env file inside the image" bash -c "! docker run --rm --entrypoint sh $API_IMAGE -c 'ls -A /app | grep -E \"^\\.env\"'"
+check "no .env file inside the migrate image" bash -c "! docker run --rm --entrypoint sh $MIGRATE_IMAGE -c 'ls -A /app | grep -E \"^\.env\"'"
 check "no docs, tests or source folder inside the image" bash -c "! docker run --rm --entrypoint sh $API_IMAGE -c 'ls /app' | grep -E '^(docs|test|src|prisma)\$'"
 check "image history shows no env secrets" bash -c "! docker history --no-trunc $API_IMAGE | grep -Ei 'password|secret|PAYU_|DATABASE_URL'"
 
