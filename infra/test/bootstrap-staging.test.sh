@@ -70,7 +70,8 @@ expect "dry run changes nothing (no change call reached gcloud)" test -z "$(chan
 expect "plans to create the pool and the provider" bash -c "grep -q 'workload-identity-pools create github-pool' <<<\"\$1\" && grep -q 'providers create-oidc github-provider' <<<\"\$1\"" _ "$OUT"
 expect "provider trusts only this repository and only the develop branch" grep -qF -- "--attribute-condition ${GOOD_CONDITION}" <<<"$OUT"
 expect "only this repository (not the whole pool) may act as the deployer" grep -qF -- "--member ${GOOD_MEMBER}" <<<"$OUT"
-expect "deployer gets exactly run.developer at project level" bash -c "[ \$(grep -c 'projects add-iam-policy-binding' <<<\"\$1\") = 1 ] && grep -q 'roles/run.developer' <<<\"\$1\"" _ "$OUT"
+expect "deployer gets exactly run.developer at project level" bash -c "[ \$(grep 'projects add-iam-policy-binding' <<<\"\$1\" | grep -c 'serviceAccount:deployer@') = 1 ] && grep 'projects add-iam-policy-binding' <<<\"\$1\" | grep 'serviceAccount:deployer@' | grep -q -- '--role roles/run.developer'" _ "$OUT"
+expect "the API account gets exactly firebaseauth.viewer at project level (reads Firebase users for the revocation check)" bash -c "[ \$(grep 'projects add-iam-policy-binding' <<<\"\$1\" | grep -c 'serviceAccount:api-runtime@') = 1 ] && grep 'projects add-iam-policy-binding' <<<\"\$1\" | grep 'serviceAccount:api-runtime@' | grep -q -- '--role roles/firebaseauth.viewer'" _ "$OUT"
 expect "no secret is bound while none exists, and the script says so" bash -c "! grep -q 'secrets add-iam-policy-binding' <<<\"\$1\" && grep -q 'skip     secret PAYU_KEY' <<<\"\$1\"" _ "$OUT"
 expect "enables the APIs workload identity needs (sts, iamcredentials) first" bash -c "grep -q 'services enable iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com' <<<\"\$1\"" _ "$OUT"
 expect "the deploy is limited to the manual (workflow_dispatch) event" grep -qF "assertion.event_name == 'workflow_dispatch'" <<<"$OUT"
@@ -123,7 +124,7 @@ expect "rejects an unknown option (exit 2)" test "$CODE" = 2
 echo "== verify =="
 good_env() {
   reset; export STUB_PROVIDER=yes STUB_SECRETS="PAYU_KEY PAYU_SALT DATABASE_URL" STUB_CONDITION="$GOOD_CONDITION" STUB_KEYS="" \
-    STUB_WIF_MEMBERS="$GOOD_MEMBER" STUB_ROLES_DEPLOYER="roles/run.developer" STUB_ROLES_RUNTIME="" STUB_ROLES_SCHEDULER="" \
+    STUB_WIF_MEMBERS="$GOOD_MEMBER" STUB_ROLES_DEPLOYER="roles/run.developer" STUB_ROLES_RUNTIME="roles/firebaseauth.viewer" STUB_ROLES_SCHEDULER="" \
     STUB_SECRET_ACCESSORS="serviceAccount:api-runtime@ease-disease-staging.iam.gserviceaccount.com" \
     STUB_AR_WRITERS="$DEPLOYER_SA" STUB_RUNTIME_USERS="$DEPLOYER_SA" STUB_PROJECT_SECRET_READERS=""
 }
@@ -138,7 +139,8 @@ verify_fails() { # verify_fails "description"  (environment already modified)
 }
 good_env; export STUB_KEYS="projects/p/serviceAccounts/x/keys/abc"; verify_fails "a downloaded key is flagged"
 good_env; export STUB_ROLES_DEPLOYER=$'roles/run.developer\nroles/owner'; verify_fails "an extra owner role on the deployer is flagged"
-good_env; export STUB_ROLES_RUNTIME="roles/editor"; verify_fails "any project role on the runtime account is flagged"
+good_env; export STUB_ROLES_RUNTIME=$'roles/firebaseauth.viewer\nroles/editor'; verify_fails "any extra project role on the runtime account is flagged"
+good_env; export STUB_ROLES_RUNTIME=""; verify_fails "a runtime account without the Firebase Authentication read role is flagged (checkout would fail)"
 good_env; export STUB_CONDITION="assertion.repository == '${REPO}'"; verify_fails "a provider that trusts any branch is flagged"
 good_env; export STUB_CONDITION=""; verify_fails "a provider with no condition is flagged"
 good_env; export STUB_WIF_MEMBERS="principalSet://iam.googleapis.com/${POOL}/*"; verify_fails "letting the whole pool act as the deployer is flagged"

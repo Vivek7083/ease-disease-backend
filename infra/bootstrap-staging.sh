@@ -35,6 +35,9 @@ DEPLOYER="deployer@${PROJECT_ID}.iam.gserviceaccount.com"
 RUNTIME="api-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
 SCHEDULER="scheduler-tick@${PROJECT_ID}.iam.gserviceaccount.com"
 DEPLOYER_PROJECT_ROLES="roles/run.developer"
+# On the money route the API checks that an account was not disabled or signed out (a Firebase Authentication lookup), so
+# its own account may READ Firebase Authentication users. Nothing else at project level.
+RUNTIME_PROJECT_ROLES="roles/firebaseauth.viewer"
 
 MODE="apply"
 for argument in "$@"; do
@@ -142,7 +145,7 @@ verify() {
     problem "who may act as the deployer: '$(joined "$members")', expected only '${REPO_MEMBER}'"
   fi
 
-  for entry in "deployer:${DEPLOYER}:${DEPLOYER_PROJECT_ROLES}" "api-runtime:${RUNTIME}:" "scheduler-tick:${SCHEDULER}:"; do
+  for entry in "deployer:${DEPLOYER}:${DEPLOYER_PROJECT_ROLES}" "api-runtime:${RUNTIME}:${RUNTIME_PROJECT_ROLES}" "scheduler-tick:${SCHEDULER}:"; do
     name="${entry%%:*}"; rest="${entry#*:}"; account="${rest%%:*}"; expected="${rest#*:}"
     query_into roles "the project roles of ${name}" gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' \
       --filter="bindings.members=serviceAccount:${account}" --format='value(bindings.role)'
@@ -234,6 +237,10 @@ run gcloud projects add-iam-policy-binding "$PROJECT_ID" --role "$DEPLOYER_PROJE
   --member "serviceAccount:${DEPLOYER}" --condition=None
 run gcloud iam service-accounts add-iam-policy-binding "$RUNTIME" --project "$PROJECT_ID" \
   --role roles/iam.serviceAccountUser --member "serviceAccount:${DEPLOYER}"
+
+# The runtime account: read Firebase Authentication users (the revocation check), and nothing else at project level.
+run gcloud projects add-iam-policy-binding "$PROJECT_ID" --role "$RUNTIME_PROJECT_ROLES" \
+  --member "serviceAccount:${RUNTIME}" --condition=None
 
 # The runtime account reads exactly the named secrets and nothing else.
 for secret in "${SECRETS[@]}"; do
