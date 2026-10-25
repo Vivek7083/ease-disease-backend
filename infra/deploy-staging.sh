@@ -23,7 +23,6 @@ REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/api"
 SERVICE="api"
 JOB="api-migrate"
 RUNTIME="api-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
-SECRETS=(PAYU_KEY PAYU_SALT DATABASE_URL DATABASE_URL_DIRECT)
 SLEEP_SECONDS="${SLEEP_SECONDS:-5}"
 CHECK_ATTEMPTS="${CHECK_ATTEMPTS:-12}"
 # ---------------------------------------------------------------------------------------------------------------------
@@ -74,10 +73,9 @@ for image in "$IMAGE" "$MIGRATE_IMAGE"; do
   gcloud artifacts docker images describe "$image" --project "$PROJECT_ID" >/dev/null 2>&1 \
     || { echo "Refusing to run: image ${image} is not in Artifact Registry (build and push it first)." >&2; exit 2; }
 done
-for secret in "${SECRETS[@]}"; do
-  gcloud secrets describe "$secret" --project "$PROJECT_ID" >/dev/null 2>&1 \
-    || { echo "Refusing to run: secret ${secret} does not exist in Secret Manager." >&2; exit 2; }
-done
+# No secret lookup here: the deployer holds no Secret Manager role (least privilege), so the lookup would fail and wrongly
+# report "missing". The setup script's --verify checks that the secrets exist, and Cloud Run refuses a deploy that names a
+# secret the runtime account cannot read.
 
 # ---- 1. migrate -----------------------------------------------------------------------------------------------------
 note "== 1. migrate the database (job ${JOB}, image ${MIGRATE_IMAGE##*/}) =="
