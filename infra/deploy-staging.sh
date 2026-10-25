@@ -89,14 +89,26 @@ elif ! gcloud run jobs execute "$JOB" --project "$PROJECT_ID" --region "$REGION"
   fail "the database migration failed; the service was NOT touched and keeps serving the previous version"
 fi
 
-# ---- 2. deploy without traffic --------------------------------------------------------------------------------------
+# Reads one fact from the service's traffic list. The list is read as JSON and picked apart with node, because the gcloud
+# --flatten/--filter form came back empty on the build machine; a failure now prints its reason instead of hiding it.
+#   serving-revision: the revision that has all the traffic    candidate-url: the address of the revision tagged "candidate"
+traffic_lookup() {
+  gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json \
+    | node -e 'let d = ""; process.stdin.on("data", (c) => (d += c)).on("end", () => {
+        const traffic = (JSON.parse(d).status || {}).traffic || [];
+        const wantUrl = process.argv[1] === "candidate-url";
+        const found = wantUrl ? traffic.find((t) => t.tag === "candidate" && t.url) : traffic.find((t) => t.percent === 100);
+        process.stdout.write(found ? (wantUrl ? found.url : found.revisionName) || "" : "");
+      });' "$1"
+}
+
+# ---- 2. deploy without traffic--------------------------------------------------------------------------------------
 service_exists=1
 gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(metadata.name)' >/dev/null 2>&1 || service_exists=0
 
 previous=""
 if [ "$service_exists" = 1 ]; then
-  previous="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --flatten='status.traffic[]' \
-    --filter='status.traffic.percent=100' --format='value(status.traffic.revisionName)' 2>/dev/null || true)"
+  previous="$(traffic_lookup serving-revision || true)"
 fi
 
 env_pairs=("NODE_ENV=staging" "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}" "APP_CHECK_MODE=enforce" "FRONTEND_BASE_URL=${FRONTEND_ORIGIN}"
@@ -122,8 +134,7 @@ if [ "$MODE" = "dry-run" ]; then
 fi
 
 if [ "$service_exists" = 1 ]; then
-  CHECK_URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --flatten='status.traffic[]' \
-    --filter='status.traffic.tag=candidate' --format='value(status.traffic.url)' 2>/dev/null || true)"
+  CHECK_URL="$(traffic_lookup candidate-url || true)"
 else
   CHECK_URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)"
 fi
