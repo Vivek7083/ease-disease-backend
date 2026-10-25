@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "ease-disease-staging-api",
+    "public": "hosting-api-public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": { "serviceId": "api", "region": "asia-south1" }
+      }
+    ]
+  }
+}

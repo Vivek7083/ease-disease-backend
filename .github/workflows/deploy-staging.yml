@@ -1,0 +1,90 @@
+name: deploy-staging
+
+# A manual button ("Run workflow", branch develop) deploys the UAT environment. Nothing deploys by itself.
+# Keyless: GitHub proves who it is to Google (Workload Identity Federation); the cloud side only accepts this repository,
+# the develop branch and the manual event. No secret is stored in GitHub: secrets are Secret Manager references.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # the keyless Google login
+  checks: read # to see whether CI passed for this exact commit
+
+# Two deploys must never overlap; the second waits for the first.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build, migrate, deploy, check
+    # Defence in depth: the cloud side refuses any other branch too.
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: staging
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: refuse unless CI passed for exactly this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          results="$(gh api "repos/${REPOSITORY}/commits/${COMMIT}/check-runs?per_page=100" --jq '.check_runs[] | "\(.name)\t\(.conclusion)"')"
+          missing=0
+          while IFS= read -r required; do
+            if grep -Fxq -- "${required}"$'\tsuccess' <<<"$results"; then
+              echo "ok       ${required}"
+            else
+              echo "MISSING  ${required} (not run, still running, or not successful for ${COMMIT})"
+              missing=1
+            fi
+          done <<'REQUIRED'
+          lint, typecheck, unit tests, build
+          end-to-end tests (real Postgres)
+          container image builds
+          workflow and script checks
+          secret scan and dependency audit
+          REQUIRED
+          [ "$missing" = 0 ] || { echo "Refusing to deploy: CI has not passed for this commit." >&2; exit 1; }
+
+      # google-github-actions/auth v3.0.0
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      # google-github-actions/setup-gcloud v3.0.1
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: build and push both images, tagged with the commit
+        env:
+          REGISTRY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+          REGION: ${{ vars.GCP_REGION }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build --target runtime -t "${REGISTRY}/api:${TAG}" .
+          docker build --target migrate -t "${REGISTRY}/api:${TAG}-migrate" .
+          docker push "${REGISTRY}/api:${TAG}"
+          docker push "${REGISTRY}/api:${TAG}-migrate"
+
+      - name: migrate, deploy without traffic, check, switch
+        env:
+          TAG: ${{ github.sha }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          FRONTEND_BASE_URL: ${{ vars.FRONTEND_BASE_URL }}
+          API_PUBLIC_URL: ${{ vars.API_PUBLIC_URL }}
+          TICK_AUDIENCE: ${{ vars.TICK_AUDIENCE }}
+          TICK_SERVICE_ACCOUNT_EMAIL: ${{ vars.TICK_SERVICE_ACCOUNT_EMAIL }}
+          TRUST_PROXY_HOPS: ${{ vars.TRUST_PROXY_HOPS }}
+          CORS_EXTRA_ORIGINS: ${{ vars.CORS_EXTRA_ORIGINS }}
+        run: bash infra/deploy-staging.sh "${TAG}"
