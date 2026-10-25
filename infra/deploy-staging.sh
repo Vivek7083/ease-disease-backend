@@ -139,7 +139,7 @@ status_of() { curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$@" 2>/dev/
 check_health() { # retries: a cold start and a sleeping database can take a while
   local body
   for _ in $(seq 1 "$CHECK_ATTEMPTS"); do
-    body="$(curl -sS --max-time 20 "$1/healthz" 2>/dev/null || true)"
+    body="$(curl -sS --max-time 20 "$1/v1/health" 2>/dev/null || true)"
     if [[ "$body" == *'"status":"ok"'* && "$body" == *'"db":"ok"'* ]]; then return 0; fi
     sleep "$SLEEP_SECONDS"
   done
@@ -148,7 +148,7 @@ check_health() { # retries: a cold start and a sleeping database can take a whil
 
 run_checks() { # run_checks <base-url>
   local base="$1" body acao
-  if check_health "$base"; then pass "/healthz is ok and the database answers"; else bad "/healthz is not ok with the database"; fi
+  if check_health "$base"; then pass "/v1/health is ok and the database answers"; else bad "/v1/health is not ok with the database"; fi
 
   body="$(curl -sS --max-time 20 "$base/v1/packages" 2>/dev/null || true)"
   if [[ "$body" == '{"packages":[{'* ]]; then

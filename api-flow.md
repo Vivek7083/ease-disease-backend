@@ -118,7 +118,7 @@ sequenceDiagram
 **Legend:** 🌐 public · 🔐 Bearer token · 🛡️ App Check · 🔁 Idempotency-Key
 
 ### Health
-**`GET /healthz`** 🌐 → `200 { "status": "ok", "version": "1.0.3", "db": "ok" }`
+**`GET /healthz`** and **`GET /v1/health`** 🌐 → `200 { "status": "ok", "version": "1.0.3", "db": "ok" }`. Same answer on both paths. On Cloud Run use `/v1/health`: its front end answers `/healthz` itself with a Google 404 page.
 
 ### Auth & profile
 
