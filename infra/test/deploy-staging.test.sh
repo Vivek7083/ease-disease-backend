@@ -23,8 +23,7 @@ case "$*" in
   "run jobs deploy"*) exit 0 ;;
   "run jobs execute"*) [ -z "${STUB_MIGRATION_FAIL:-}" ] || exit 1 ;;
   "run services describe"*"metadata.name"*) [ -z "${STUB_NO_SERVICE:-}" ] || exit 1; echo api ;;
-  "run services describe"*"percent=100"*) echo "${STUB_PREVIOUS:-api-00001-aaa}" ;;
-  "run services describe"*"tag=candidate"*) echo "https://candidate---api-xyz.a.run.app" ;;
+  "run services describe"*"format=json"*) printf '{"status":{"traffic":[{"percent":100,"revisionName":"%s"},{"revisionName":"api-00002-bbb","tag":"candidate","url":"https://candidate---api-xyz.a.run.app"}]}}' "${STUB_PREVIOUS:-api-00001-aaa}" ;;
   "run services describe"*"status.url"*) echo "https://api-xyz.a.run.app" ;;
   "run services describe"*"latestReadyRevisionName"*) echo "api-00002-bbb" ;;
   "run deploy"*) [ -z "${STUB_DEPLOY_FAIL:-}" ] || exit 1 ;;
