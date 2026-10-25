@@ -85,6 +85,7 @@ expect "second run updates the provider instead of failing or creating a duplica
 expect "changes really reach gcloud when applying" test -n "$(changes)"
 expect "only the secrets that exist get a binding (2 of 4)" test "$(grep -c 'secrets add-iam-policy-binding' "$STUB_LOG")" = 2
 expect "PAYU_SALT (missing) is skipped with a message" grep -q 'skip     secret PAYU_SALT' <<<"$OUT"
+expect "each secret binding gives read access to api-runtime and to nobody else" bash -c "grep -c 'secrets add-iam-policy-binding' '$STUB_LOG' | grep -q '^2$' && ! grep 'secrets add-iam-policy-binding' '$STUB_LOG' | grep -v -- '--member serviceAccount:api-runtime@ease-disease-staging.iam.gserviceaccount.com' | grep -q ." 
 
 echo "== stale trust and settings =="
 reset; export STUB_POOL=yes STUB_PROVIDER=yes STUB_WIF_MEMBERS="principalSet://iam.googleapis.com/${POOL}/attribute.repository/old-owner/old-name"
@@ -99,6 +100,7 @@ expect "an exported GITHUB_REPOSITORY cannot change who is trusted" bash -c "gre
 sed 's/^GITHUB_REPOSITORY_ID=""/GITHUB_REPOSITORY_ID="987654"/' "$SCRIPT" >"$WORK/pinned.sh"
 OUT="$(bash "$WORK/pinned.sh" --dry-run 2>&1)"
 expect "with a repository id set, the condition and the trust use the id" bash -c "grep -qF \"assertion.repository_id == '987654'\" <<<\"\$1\" && grep -qF 'attribute.repository_id/987654' <<<\"\$1\" && ! grep -q WARN <<<\"\$1\"" _ "$OUT"
+expect "with a repository id set, the provider maps the id claim (otherwise the trust matches nobody)" grep -qF 'attribute.repository_id=assertion.repository_id' <<<"$OUT"
 OUT="$(bash "$SCRIPT" --help 2>&1)"
 expect "--help prints the usage comment only (not code)" bash -c "! grep -q 'set -euo' <<<\"\$1\" && grep -q 'dry-run' <<<\"\$1\"" _ "$OUT"
 
