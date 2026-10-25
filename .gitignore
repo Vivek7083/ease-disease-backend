@@ -49,3 +49,9 @@ service-account*.json
 # --- Misc ---
 *.tmp
 .cache/
+
+# --- Local AI-agent tooling (developer-specific, installed by the Neon CLI; not part of the product) ---
+.mcp.json
+.claude/skills/neon/
+.claude/skills/neon-postgres/
+skills-lock.json

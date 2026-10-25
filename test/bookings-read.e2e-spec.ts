@@ -139,7 +139,9 @@ describe('GET /v1/bookings and GET /v1/bookings/{reference}', () => {
         packageTitle: 'One-Time Consult',
         amountPaise: AMOUNT_PAISE,
         ...CONSULTEE,
-        consentAt: new Date(),
+        // A fixed, distinctive time: with `new Date()` it could equal the booking's own createdAt (same millisecond on a fast
+        // runner), and the privacy test below would then wrongly find the consent time in the legitimately returned createdAt.
+        consentAt: new Date('2026-09-30T08:09:10.111Z'),
         ...(options.createdAt ? { createdAt: options.createdAt } : {}),
         ...options.extra,
       },

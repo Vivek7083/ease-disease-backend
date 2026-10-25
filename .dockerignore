@@ -8,6 +8,8 @@
 .idea
 node_modules
 dist
+# generated on this machine (git-ignored): the image must always generate its own Prisma client
+src/generated
 coverage
 docs
 test
