@@ -13,6 +13,8 @@
 # Settings arrive as environment variables (the workflow passes them from the GitHub environment variables):
 #   FIREBASE_PROJECT_ID FRONTEND_BASE_URL API_PUBLIC_URL TICK_AUDIENCE TICK_SERVICE_ACCOUNT_EMAIL
 #   TRUST_PROXY_HOPS (default 0)   CORS_EXTRA_ORIGINS (optional, comma separated)
+# Who may call the service (the invoker check) is NOT set here: the deployer cannot change it. The project owner sets it once
+# when creating the service (see the deployment runbook); later deploys keep it.
 # Secrets are never passed in: they are Secret Manager references. This script never prints a secret.
 set -euo pipefail
 
@@ -104,7 +106,7 @@ env_pairs=("NODE_ENV=staging" "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}" "APP_
 ENV_ARG="^#^$(IFS='#'; echo "${env_pairs[*]}")"
 
 deploy_args=(--project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" --service-account "$RUNTIME"
-  --min-instances 0 --max-instances 1 --timeout 60 --memory 512Mi --cpu 1 --no-invoker-iam-check
+  --min-instances 0 --max-instances 1 --timeout 60 --memory 512Mi --cpu 1
   --set-env-vars "$ENV_ARG" --set-secrets "PAYU_KEY=PAYU_KEY:latest,PAYU_SALT=PAYU_SALT:latest,DATABASE_URL=DATABASE_URL:latest")
 
 note "== 2. deploy ${IMAGE##*/} ${SERVICE} $([ "$service_exists" = 1 ] && echo 'without traffic' || echo '(first deploy: a new service has to take traffic at once)') =="
