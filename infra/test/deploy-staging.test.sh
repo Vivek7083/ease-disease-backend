@@ -63,7 +63,7 @@ if [ "$status" = 1 ]; then
   exit 0
 fi
 case "$path" in
-  /healthz)
+  /v1/health)
     if [[ "$host" == api-xyz* ]]; then printf '%s' "${STUB_LIVE_HEALTH:-{\"status\":\"ok\",\"version\":\"0.0.1\",\"db\":\"ok\"}}"
     else printf '%s' "${STUB_HEALTH:-{\"status\":\"ok\",\"version\":\"0.0.1\",\"db\":\"ok\"}}"; fi ;;
   /v1/packages) printf '%s' "${STUB_PACKAGES:-{\"packages\":[{\"id\":\"1\",\"title\":\"T\",\"description\":[],\"pricePaise\":100,\"originalPricePaise\":null,\"currency\":\"INR\",\"durationMinutes\":30}]}}" ;;
@@ -112,7 +112,7 @@ OUT="$(bash "$SCRIPT" "$TAG" 2>&1)"; CODE=$?
 expect "exits 0 and reports the revision and digest" bash -c "[ $CODE = 0 ] && grep -q 'DEPLOYED  revision api-00002-bbb' <<<\"\$1\" && grep -q 'sha256:abc123' <<<\"\$1\"" _ "$OUT"
 J=$(logline "run jobs execute"); D=$(logline "gcloud run deploy"); T=$(logline "update-traffic.*--to-latest"); R=$(logline "remove-tags candidate")
 expect "order: migrate, deploy, checks, switch traffic, drop the tag" test "$J" -lt "$D" -a "$D" -lt "$T" -a "$T" -lt "$R"
-expect "the candidate address was checked before traffic moved" bash -c "[ \$(grep -n 'curl GET https://candidate---api-xyz.a.run.app/healthz' '$STUB_LOG' | head -1 | cut -d: -f1) -lt $T ]"
+expect "the candidate address was checked before traffic moved" bash -c "[ \$(grep -n 'curl GET https://candidate---api-xyz.a.run.app/v1/health' '$STUB_LOG' | head -1 | cut -d: -f1) -lt $T ]"
 expect "prints how to go back to the previous revision" grep -q 'to-revisions api-00001-aaa=100' <<<"$OUT"
 
 echo "== a failed migration =="
@@ -144,7 +144,7 @@ echo "== first deploy of a new service =="
 reset; export STUB_NO_SERVICE=1
 OUT="$(bash "$SCRIPT" "$TAG" 2>&1)"; CODE=$?
 expect "no --no-traffic flag (a new service must take traffic) and no traffic switching" bash -c "[ $CODE = 0 ] && ! grep -q -- '--no-traffic' '$STUB_LOG' && ! grep -q 'update-traffic' '$STUB_LOG'"
-expect "the first deploy is still checked, on the service address" grep -q 'curl GET https://api-xyz.a.run.app/healthz' "$STUB_LOG"
+expect "the first deploy is still checked, on the service address" grep -q 'curl GET https://api-xyz.a.run.app/v1/health' "$STUB_LOG"
 reset; export STUB_NO_SERVICE=1 STUB_LIVE_HEALTH='{"status":"ok","db":"down"}'
 OUT="$(bash "$SCRIPT" "$TAG" 2>&1)"; CODE=$?
 expect "a failing first deploy exits 1 and says so" bash -c "[ $CODE = 1 ] && grep -q 'FIRST deploy' <<<\"\$1\"" _ "$OUT"

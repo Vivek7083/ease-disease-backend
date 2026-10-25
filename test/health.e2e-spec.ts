@@ -36,6 +36,16 @@ describe('/healthz (e2e)', () => {
     });
   });
 
+  it('answers the same on /v1/health (Cloud Run swallows /healthz before it reaches the container)', async () => {
+    const response = await request(app.getHttpServer()).get('/v1/health').expect(200);
+
+    expect(response.body).toEqual({
+      status: 'ok',
+      version: expect.any(String),
+      db: 'ok',
+    });
+  });
+
   it('attaches an X-Request-Id header to the response', async () => {
     const response = await request(app.getHttpServer()).get('/healthz').expect(200);
 
