@@ -164,11 +164,11 @@ reset; unset FRONTEND_BASE_URL; guard "refuses a missing setting" "$TAG"
 reset; export API_PUBLIC_URL=http://api-xyz.a.run.app; guard "refuses a non-https address" "$TAG"
 reset; export TRUST_PROXY_HOPS=9; guard "refuses an impossible proxy hop count" "$TAG"
 reset; export STUB_MISSING_IMAGE="-migrate"; guard "refuses when the migrate image is missing" "$TAG"
-reset; export STUB_MISSING_SECRETS="DATABASE_URL_DIRECT"; guard "refuses when a secret is missing" "$TAG"
 
 echo "== the script file itself =="
 expect "never makes the service public with allUsers or allow-unauthenticated" bash -c "! grep -qiE 'allUsers|--allow-unauthenticated' '$SCRIPT'"
 expect "never reads or writes a secret value" bash -c "! grep -qE 'versions access|secrets versions|--data-file' '$SCRIPT'"
+expect "does not look secrets up (the deployer has no Secret Manager role, so a lookup fails and wrongly says missing)" bash -c "! grep -qE 'gcloud secrets' '$SCRIPT'"
 expect "strict mode" grep -q '^set -euo pipefail' "$SCRIPT"
 
 echo
