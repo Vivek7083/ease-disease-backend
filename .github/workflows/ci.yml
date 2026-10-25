@@ -95,9 +95,13 @@ jobs:
         run: >-
           docker run --rm -v "$PWD:/mnt" -w /mnt
           koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
-          --severity=warning infra/bootstrap-staging.sh infra/test/bootstrap-staging.test.sh scripts/docker-smoke.sh
-      - name: bootstrap script tests (fake gcloud, no cloud access)
-        run: bash infra/test/bootstrap-staging.test.sh
+          --severity=warning infra/bootstrap-staging.sh infra/deploy-staging.sh infra/scheduler-staging.sh
+          infra/test/bootstrap-staging.test.sh infra/test/deploy-staging.test.sh infra/test/scheduler-staging.test.sh scripts/docker-smoke.sh
+      - name: infrastructure script tests (fake gcloud and curl, no cloud access)
+        run: |
+          bash infra/test/bootstrap-staging.test.sh
+          bash infra/test/deploy-staging.test.sh
+          bash infra/test/scheduler-staging.test.sh
 
   security:
     name: secret scan and dependency audit
