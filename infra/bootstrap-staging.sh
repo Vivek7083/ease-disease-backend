@@ -13,14 +13,22 @@ set -euo pipefail
 # ---- settings (the only things to edit) -------------------------------------------------------------------------------
 PROJECT_ID="ease-disease-staging"
 REGION="asia-south1"
-# The one repository allowed to deploy (change it here when the repository moves to the owners' GitHub account).
-GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-Vivek7083/ease-disease-backend}"
-# The one branch allowed to deploy to this project.
+# The one repository allowed to deploy (edit here when the repository moves to the owners' GitHub account, then re-run:
+# the old trust is removed by the apply step). Deliberately NOT read from the environment.
+GITHUB_REPOSITORY="Vivek7083/ease-disease-backend"
+# GitHub's numeric id of that repository (a name can be reclaimed after a rename or move; the id cannot). Get it once from a
+# workflow run (it prints github.repository_id) or from the GitHub API. Empty = trust is pinned by name only (verify warns).
+GITHUB_REPOSITORY_ID="1428738784"
+# The one branch and the one event allowed to deploy to this project (the deploy is a manual button on develop).
 ALLOWED_REF="refs/heads/develop"
+ALLOWED_EVENT="workflow_dispatch"
 POOL_ID="github-pool"
 PROVIDER_ID="github-provider"
 AR_REPO="api"
-SECRETS=(PAYU_KEY PAYU_SALT DATABASE_URL)
+# DATABASE_URL: pooled address for the API; DATABASE_URL_DIRECT: direct address for the migration job.
+SECRETS=(PAYU_KEY PAYU_SALT DATABASE_URL DATABASE_URL_DIRECT)
+# APIs the keyless deploy and the runtime need (sts and iamcredentials are what Workload Identity Federation uses).
+APIS=(iam iamcredentials sts run artifactregistry secretmanager cloudscheduler)
 # -----------------------------------------------------------------------------------------------------------------------
 
 DEPLOYER="deployer@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -33,7 +41,7 @@ for argument in "$@"; do
   case "$argument" in
     --dry-run) MODE="dry-run" ;;
     --verify) MODE="verify" ;;
-    -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "unknown option: $argument" >&2; exit 2 ;;
   esac
 done
@@ -41,10 +49,25 @@ done
 problems=0
 note() { echo "$*"; }
 problem() { echo "PROBLEM  $*"; problems=$((problems + 1)); }
+warn() { echo "WARN     $*"; }
 # Every command that CHANGES something goes through run: printed in dry-run, executed otherwise.
 run() {
   if [ "$MODE" = "dry-run" ]; then echo "+ $*"; else echo "+ $1 $2 $3 ..."; "$@"; fi
 }
+# A read-only query whose failure is reported as a problem instead of ending the script half way (set -e).
+# Usage: query_into VARIABLE "what is being read" gcloud ...   (not run in a subshell, so the problem count is kept)
+query_into() {
+  local __var="$1" __label="$2" __out
+  shift 2
+  if __out="$("$@" 2>/dev/null)"; then
+    printf -v "$__var" '%s' "$__out"
+  else
+    printf -v "$__var" '%s' ""
+    problem "could not read ${__label} (missing permission or API?)"
+  fi
+}
+# Lines sorted and joined by one space, for comparing lists.
+joined() { printf '%s\n' "$1" | sed '/^$/d' | sort | tr '\n' ' ' | sed 's/ $//'; }
 
 # ---- guards ---------------------------------------------------------------------------------------------------------
 active="$(gcloud config get-value project 2>/dev/null || true)"
@@ -53,15 +76,26 @@ if [ "$active" != "$PROJECT_ID" ]; then
   echo "Fix with: gcloud config set project ${PROJECT_ID}" >&2
   exit 2
 fi
-if [ "$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingEnabled)')" != "True" ]; then
+if ! billing="$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingEnabled)' 2>/dev/null)"; then
+  echo "Refusing to run: could not read the billing state of ${PROJECT_ID} (missing permission, or the Cloud Billing API is off)." >&2
+  exit 2
+fi
+if [ "$billing" != "True" ]; then
   echo "Refusing to run: billing is not enabled on ${PROJECT_ID}." >&2
   exit 2
 fi
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 POOL_NAME="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}"
 PROVIDER_NAME="${POOL_NAME}/providers/${PROVIDER_ID}"
-REPO_MEMBER="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository/${GITHUB_REPOSITORY}"
-CONDITION="assertion.repository == '${GITHUB_REPOSITORY}' && assertion.ref == '${ALLOWED_REF}'"
+CONDITION="assertion.repository == '${GITHUB_REPOSITORY}' && assertion.ref == '${ALLOWED_REF}' && assertion.event_name == '${ALLOWED_EVENT}'"
+MAPPING="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+if [ -n "$GITHUB_REPOSITORY_ID" ]; then
+  CONDITION="assertion.repository_id == '${GITHUB_REPOSITORY_ID}' && ${CONDITION}"
+  MAPPING="${MAPPING},attribute.repository_id=assertion.repository_id"
+  REPO_MEMBER="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository_id/${GITHUB_REPOSITORY_ID}"
+else
+  REPO_MEMBER="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository/${GITHUB_REPOSITORY}"
+fi
 
 for account in "$DEPLOYER" "$RUNTIME" "$SCHEDULER"; do
   gcloud iam service-accounts describe "$account" --project "$PROJECT_ID" >/dev/null 2>&1 \
@@ -71,53 +105,100 @@ gcloud artifacts repositories describe "$AR_REPO" --project "$PROJECT_ID" --loca
   || { echo "Artifact Registry repository '${AR_REPO}' does not exist in ${REGION} yet (runbook step 3.5)." >&2; exit 2; }
 
 # ---- verify (read only) ---------------------------------------------------------------------------------------------
+# query_into assigns the variables below indirectly (printf -v), which shellcheck cannot see.
+# shellcheck disable=SC2154
 verify() {
   note "== verify ${PROJECT_ID} =="
+
+  query_into enabled "the enabled APIs" gcloud services list --enabled --project "$PROJECT_ID" --format='value(config.name)'
+  for api in "${APIS[@]}"; do
+    case $'\n'"$enabled"$'\n' in *$'\n'"${api}.googleapis.com"$'\n'*) note "ok       API ${api} is enabled" ;; *) problem "API ${api}.googleapis.com is not enabled" ;; esac
+  done
+
   for account in "$DEPLOYER" "$RUNTIME" "$SCHEDULER"; do
-    keys="$(gcloud iam service-accounts keys list --iam-account "$account" --managed-by user --format='value(name)')"
+    query_into keys "the keys of ${account%%@*}" gcloud iam service-accounts keys list --iam-account "$account" --managed-by user --format='value(name)'
     [ -z "$keys" ] && note "ok       no downloaded key on ${account%%@*}" || problem "${account%%@*} has a downloaded key (delete it; keyless access is the rule)"
   done
 
   if gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" --project "$PROJECT_ID" --location global \
     --workload-identity-pool "$POOL_ID" >/dev/null 2>&1; then
-    have="$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" --project "$PROJECT_ID" --location global \
-      --workload-identity-pool "$POOL_ID" --format='value(attributeCondition)')"
-    [ "$have" = "$CONDITION" ] && note "ok       provider only trusts ${GITHUB_REPOSITORY} on ${ALLOWED_REF}" \
-      || problem "provider condition is '${have}', expected '${CONDITION}'"
+    query_into have "the provider condition" gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" --project "$PROJECT_ID" \
+      --location global --workload-identity-pool "$POOL_ID" --format='value(attributeCondition)'
+    if [ "$have" = "$CONDITION" ]; then
+      note "ok       provider only trusts ${GITHUB_REPOSITORY} on ${ALLOWED_REF} for ${ALLOWED_EVENT}"
+    else
+      problem "provider condition is '${have}', expected '${CONDITION}'"
+    fi
   else
     problem "workload identity provider ${PROVIDER_ID} does not exist"
   fi
+  [ -n "$GITHUB_REPOSITORY_ID" ] || warn "the trust is pinned by repository NAME only; set GITHUB_REPOSITORY_ID (a renamed or moved repository can be reclaimed by name)"
 
-  members="$(gcloud iam service-accounts get-iam-policy "$DEPLOYER" --project "$PROJECT_ID" \
-    --flatten='bindings[].members' --filter='bindings.role=roles/iam.workloadIdentityUser' --format='value(bindings.members)')"
-  [ "$members" = "$REPO_MEMBER" ] && note "ok       only this repository may act as the deployer" \
-    || problem "who may act as the deployer: '${members}', expected only '${REPO_MEMBER}'"
+  query_into members "who may act as the deployer" gcloud iam service-accounts get-iam-policy "$DEPLOYER" --project "$PROJECT_ID" \
+    --flatten='bindings[].members' --filter='bindings.role=roles/iam.workloadIdentityUser' --format='value(bindings.members)'
+  if [ "$(joined "$members")" = "$REPO_MEMBER" ]; then
+    note "ok       only this repository may act as the deployer"
+  else
+    problem "who may act as the deployer: '$(joined "$members")', expected only '${REPO_MEMBER}'"
+  fi
 
   for entry in "deployer:${DEPLOYER}:${DEPLOYER_PROJECT_ROLES}" "api-runtime:${RUNTIME}:" "scheduler-tick:${SCHEDULER}:"; do
     name="${entry%%:*}"; rest="${entry#*:}"; account="${rest%%:*}"; expected="${rest#*:}"
-    roles="$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' \
-      --filter="bindings.members=serviceAccount:${account}" --format='value(bindings.role)' | sort | tr '\n' ' ' | sed 's/ $//')"
-    [ "$roles" = "$expected" ] && note "ok       ${name} project roles: '${roles}'" || problem "${name} project roles are '${roles}', expected '${expected}'"
+    query_into roles "the project roles of ${name}" gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' \
+      --filter="bindings.members=serviceAccount:${account}" --format='value(bindings.role)'
+    if [ "$(joined "$roles")" = "$expected" ]; then
+      note "ok       ${name} project roles: '$(joined "$roles")'"
+    else
+      problem "${name} project roles are '$(joined "$roles")', expected '${expected}'"
+    fi
   done
+
+  query_into writers "who may push to the ${AR_REPO} repository" gcloud artifacts repositories get-iam-policy "$AR_REPO" --project "$PROJECT_ID" \
+    --location "$REGION" --flatten='bindings[].members' --filter='bindings.role=roles/artifactregistry.writer' --format='value(bindings.members)'
+  if [ "$(joined "$writers")" = "serviceAccount:${DEPLOYER}" ]; then
+    note "ok       only the deployer may push images"
+  else
+    problem "image writers are '$(joined "$writers")', expected only 'serviceAccount:${DEPLOYER}'"
+  fi
+
+  query_into acting "who may act as api-runtime" gcloud iam service-accounts get-iam-policy "$RUNTIME" --project "$PROJECT_ID" \
+    --flatten='bindings[].members' --filter='bindings.role=roles/iam.serviceAccountUser' --format='value(bindings.members)'
+  if [ "$(joined "$acting")" = "serviceAccount:${DEPLOYER}" ]; then
+    note "ok       only the deployer may act as api-runtime"
+  else
+    problem "who may act as api-runtime: '$(joined "$acting")', expected only 'serviceAccount:${DEPLOYER}'"
+  fi
+
+  query_into wide "project-wide secret readers" gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' \
+    --filter='bindings.role=roles/secretmanager.secretAccessor' --format='value(bindings.members)'
+  [ -z "$wide" ] && note "ok       nobody can read every secret in the project" || problem "secretAccessor is granted project-wide to: $(joined "$wide") (grant it per secret)"
 
   for secret in "${SECRETS[@]}"; do
     if gcloud secrets describe "$secret" --project "$PROJECT_ID" >/dev/null 2>&1; then
-      accessors="$(gcloud secrets get-iam-policy "$secret" --project "$PROJECT_ID" --flatten='bindings[].members' \
-        --filter='bindings.role=roles/secretmanager.secretAccessor' --format='value(bindings.members)' | sort | tr '\n' ' ' | sed 's/ $//')"
-      [ "$accessors" = "serviceAccount:${RUNTIME}" ] && note "ok       ${secret} readable only by api-runtime" \
-        || problem "${secret} accessors are '${accessors}', expected only 'serviceAccount:${RUNTIME}'"
+      query_into accessors "the readers of ${secret}" gcloud secrets get-iam-policy "$secret" --project "$PROJECT_ID" --flatten='bindings[].members' \
+        --filter='bindings.role=roles/secretmanager.secretAccessor' --format='value(bindings.members)'
+      if [ "$(joined "$accessors")" = "serviceAccount:${RUNTIME}" ]; then
+        note "ok       ${secret} readable only by api-runtime"
+      else
+        problem "${secret} accessors are '$(joined "$accessors")', expected only 'serviceAccount:${RUNTIME}'"
+      fi
     else
       note "pending  secret ${secret} is not created yet"
     fi
   done
-  [ "$problems" -eq 0 ] && note "verify: all good" || note "verify: ${problems} problem(s)"
+  if [ "$problems" -eq 0 ]; then note "verify: all good"; else note "verify: ${problems} problem(s)"; fi
   [ "$problems" -eq 0 ]
 }
 
 if [ "$MODE" = "verify" ]; then verify; exit $?; fi
 
 # ---- apply ----------------------------------------------------------------------------------------------------------
-note "== ${MODE}: ${PROJECT_ID} (${PROJECT_NUMBER}), repository ${GITHUB_REPOSITORY}, branch ${ALLOWED_REF} =="
+note "== ${MODE}: ${PROJECT_ID} (${PROJECT_NUMBER}), repository ${GITHUB_REPOSITORY}, branch ${ALLOWED_REF}, event ${ALLOWED_EVENT} =="
+[ -n "$GITHUB_REPOSITORY_ID" ] || warn "GITHUB_REPOSITORY_ID is empty: the trust is pinned by repository name only"
+
+api_list=()
+for api in "${APIS[@]}"; do api_list+=("${api}.googleapis.com"); done
+run gcloud services enable "${api_list[@]}" --project "$PROJECT_ID"
 
 if ! gcloud iam workload-identity-pools describe "$POOL_ID" --project "$PROJECT_ID" --location global >/dev/null 2>&1; then
   run gcloud iam workload-identity-pools create "$POOL_ID" --project "$PROJECT_ID" --location global --display-name "GitHub Actions"
@@ -125,7 +206,7 @@ fi
 
 provider_args=(--project "$PROJECT_ID" --location global --workload-identity-pool "$POOL_ID"
   --display-name "GitHub" --issuer-uri "https://token.actions.githubusercontent.com"
-  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+  --attribute-mapping "$MAPPING"
   --attribute-condition "$CONDITION")
 if gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" --project "$PROJECT_ID" --location global \
   --workload-identity-pool "$POOL_ID" >/dev/null 2>&1; then
@@ -134,7 +215,15 @@ else
   run gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" "${provider_args[@]}"
 fi
 
-# Only this repository (not the whole pool) may act as the deployer.
+# Only this repository (not the whole pool) may act as the deployer; any older trust (an old repository name) is removed.
+existing="$(gcloud iam service-accounts get-iam-policy "$DEPLOYER" --project "$PROJECT_ID" --flatten='bindings[].members' \
+  --filter='bindings.role=roles/iam.workloadIdentityUser' --format='value(bindings.members)' 2>/dev/null || true)"
+for member in $existing; do
+  if [ "$member" != "$REPO_MEMBER" ]; then
+    run gcloud iam service-accounts remove-iam-policy-binding "$DEPLOYER" --project "$PROJECT_ID" \
+      --role roles/iam.workloadIdentityUser --member "$member"
+  fi
+done
 run gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER" --project "$PROJECT_ID" \
   --role roles/iam.workloadIdentityUser --member "$REPO_MEMBER"
 
@@ -164,5 +253,5 @@ note "  GCP_WORKLOAD_IDENTITY_PROVIDER   = ${PROVIDER_NAME}"
 note "  GCP_DEPLOYER_SERVICE_ACCOUNT     = ${DEPLOYER}"
 note "  GCP_RUNTIME_SERVICE_ACCOUNT      = ${RUNTIME}"
 note "  GCP_ARTIFACT_REPOSITORY          = ${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
-[ "$MODE" = "dry-run" ] && note "(dry run: nothing was changed)"
+if [ "$MODE" = "dry-run" ]; then note "(dry run: nothing was changed)"; else note "Next: bash infra/bootstrap-staging.sh --verify (permission changes can take a minute to show)"; fi
 exit 0
