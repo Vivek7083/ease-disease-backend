@@ -96,7 +96,7 @@ expect "dry run exits 0" test "$CODE" = 0
 expect "dry run changes nothing" test -z "$(changes)"
 expect "the new version starts without traffic on its own tag" grep -q -- '--no-traffic --tag candidate' <<<"$OUT"
 expect "at most one instance (rate limits live in memory)" grep -q -- '--max-instances 1' <<<"$OUT"
-expect "public without an allUsers grant (the organization forbids it)" bash -c "grep -q -- '--no-invoker-iam-check' <<<\"\$1\" && ! grep -qiE 'allUsers|allow-unauthenticated' <<<\"\$1\"" _ "$OUT"
+expect "never changes who may call the service (the deployer cannot; the owner sets it once) and never uses allUsers" bash -c "! grep -qiE 'invoker-iam|allUsers|allow-unauthenticated' <<<\"\$1\"" _ "$OUT"
 expect "the migration job reads the DIRECT database secret" grep -q 'DATABASE_URL=DATABASE_URL_DIRECT:latest' <<<"$OUT"
 expect "the service reads the pooled database secret and the PayU secrets" grep -q 'PAYU_KEY=PAYU_KEY:latest,PAYU_SALT=PAYU_SALT:latest,DATABASE_URL=DATABASE_URL:latest' <<<"$OUT"
 expect "staging settings are fixed (NODE_ENV, App Check, PayU test)" bash -c "grep -q 'NODE_ENV=staging' <<<\"\$1\" && grep -q 'APP_CHECK_MODE=enforce' <<<\"\$1\" && grep -q 'PAYU_ENV=test' <<<\"\$1\"" _ "$OUT"
